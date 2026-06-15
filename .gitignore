@@ -9,3 +9,7 @@ Thumbs.db
 # Exported level packs (artifacts, not source)
 arrowout-levels-*.zip
 arrowout-pack-*.json
+
+# Tài liệu/tool tham khảo của teammate (không push tài sản người khác lên GitHub)
+_teammate/
+files.zip

@@ -24,6 +24,57 @@ function enforceHeadDir(piece) {
 const PALETTE = ["#4f9fff","#46c08a","#e0b84f","#e0586a","#b06ae0","#4fd0e0","#e08a4f","#88c850","#e04fa0","#7a86e0","#c0a44f","#4fc0a0"];
 function pieceColor(id) { return PALETTE[id % PALETTE.length]; }
 
+// ---------- Format game Snake Escape (chuẩn) <-> nội bộ ----------
+// Bảng 48 màu game chính thức (ColorType 1..48), index 1-based -> GAME_COLORS[idx-1].
+const GAME_COLORS = ['#4285F4','#2874F1','#6DA1F7','#C83F45','#C72E35','#E3595F','#FFC315','#E4A802','#FECF47','#48B06A','#31A256','#5DC57F','#9869FF','#8C5CF3','#A57DFD','#E365B0','#E752AB','#E87ABC','#EF8314','#E97600','#FB9D3C','#FF6F61','#FD5E4E','#FB8074','#0FB2B8','#00A6AC','#50CFD4','#35D8FF','#10C5EF','#65E2FF','#9EE338','#88D910','#AEE956','#8D6E3F','#8F6526','#A0865F','#5A6B7A','#4E6273','#69757F','#694714','#62400C','#775725','#2C5FCC','#1C56D1','#3D6ACB','#959595','#807E7E','#B0ADAD'];
+function gameColor(idx) { return (idx >= 1 && idx <= GAME_COLORS.length) ? GAME_COLORS[idx - 1] : null; }
+let colorMode = "rainbow";   // 'rainbow' (mỗi rắn 1 màu, dễ design) | 'game' (theo fixedColor 48 màu)
+function dirFromDelta(dx, dy) { if (dx === 1) return "right"; if (dx === -1) return "left"; if (dy === 1) return "down"; return "up"; }
+function countBends(cells) {
+  let b = 0;
+  for (let i = 1; i < cells.length - 1; i++) {
+    const a = cells[i - 1], m = cells[i], c = cells[i + 1];
+    if ((m.x - a.x) !== (c.x - m.x) || (m.y - a.y) !== (c.y - m.y)) b++;
+  }
+  return b;
+}
+// Nhận diện format game (có XSize/Arrows) vs format cũ của mình ({w,h,pieces} / grid).
+function isGameFormat(d) { return !!(d && (d.XSize != null || Array.isArray(d.Arrows))); }
+// pieces nội bộ -> object JSON đúng format game (Y-FLIP: Y_game = h-1-y; idx = x + Y_game*w).
+function toGameLevel(pieces, w, h, difficulty) {
+  const flipY = y => h - 1 - y;
+  const norm = c => Array.isArray(c) ? { x: c[0], y: c[1] } : { x: c.x, y: c.y };
+  return {
+    Difficulty: difficulty || 0, XSize: w, YSize: h,
+    Arrows: pieces.map(p => {
+      const cells = p.cells.map(norm), head = cells[0], dd = DELTA[p.dir] || { x: 0, y: -1 };
+      return {
+        Dx: dd.x, Dy: -dd.y, X: head.x, Y: flipY(head.y),
+        fixedColor: (typeof p.fixedColor === "number") ? p.fixedColor : -1,
+        Indices: cells.map(c => c.x + flipY(c.y) * w),
+        BendCount: (typeof p.bends === "number") ? p.bends : countBends(cells)
+      };
+    }),
+    Colors: []
+  };
+}
+// object JSON format game -> { w, h, pieces:[{dir, cells:[{x,y}], fixedColor, bends}] }.
+// Y-FLIP ngược lại + LUÔN suy hd từ cells (bỏ qua Dx/Dy của file — quy ước game không khớp solver).
+function fromGameLevel(data) {
+  const w = data.XSize, h = data.YSize, pieces = [];
+  for (const arrow of (data.Arrows || [])) {
+    const indices = arrow.Indices || [];
+    if (indices.length < 1) continue;
+    const cells = indices.map(idx => ({ x: idx % w, y: h - 1 - Math.floor(idx / w) }));
+    let dir;
+    if (cells.length >= 2) dir = dirFromTo(cells[1], cells[0]);
+    else dir = dirFromDelta(arrow.Dx || 0, -(arrow.Dy || 0));   // 1 ô: dùng Dx/Dy (đảo Dy)
+    const fc = (typeof arrow.fixedColor === "number") ? arrow.fixedColor : -1;
+    pieces.push({ dir, cells, fixedColor: fc, bends: (typeof arrow.BendCount === "number") ? arrow.BendCount : countBends(cells) });
+  }
+  return { w, h, pieces };
+}
+
 // (Đã bỏ level mẫu — chỉ vào chế độ chơi khi Test level đang tạo hoặc chơi từ Thư viện hàng loạt)
 
 // ---------- State ----------
@@ -599,6 +650,25 @@ function arrowTri(head, d) {
   const br = (head.x - d.x * back - px * b).toFixed(1) + "," + (head.y - d.y * back - py * b).toFixed(1);
   return tip + " " + bl + " " + br;
 }
+// Đường đi BO TRÒN qua các điểm: mỗi góc gập -> cung tròn (mềm mại, dễ chịu hơn nét gãy vuông).
+function roundedPath(pts, r) {
+  const f = n => n.toFixed(1);
+  if (pts.length < 2) return "";
+  if (pts.length === 2) return `M${f(pts[0].x)},${f(pts[0].y)} L${f(pts[1].x)},${f(pts[1].y)}`;
+  let d = `M${f(pts[0].x)},${f(pts[0].y)}`;
+  for (let i = 1; i < pts.length - 1; i++) {
+    const p0 = pts[i - 1], p1 = pts[i], p2 = pts[i + 1];
+    const v1x = p1.x - p0.x, v1y = p1.y - p0.y, l1 = Math.hypot(v1x, v1y) || 1;
+    const v2x = p2.x - p1.x, v2y = p2.y - p1.y, l2 = Math.hypot(v2x, v2y) || 1;
+    const rr = Math.min(r, l1 / 2, l2 / 2);
+    const ax = p1.x - v1x / l1 * rr, ay = p1.y - v1y / l1 * rr;   // điểm vào cung
+    const bx = p1.x + v2x / l2 * rr, by = p1.y + v2y / l2 * rr;   // điểm ra cung
+    d += ` L${f(ax)},${f(ay)} Q${f(p1.x)},${f(p1.y)} ${f(bx)},${f(by)}`;
+  }
+  const last = pts[pts.length - 1];
+  d += ` L${f(last.x)},${f(last.y)}`;
+  return d;
+}
 function pieceGeom(cells, dir) {
   const cs = cells.map(c => cellCenter(c.x, c.y));
   const d = DELTA[dir];
@@ -610,17 +680,17 @@ function pieceGeom(cells, dir) {
   } else {
     pts = cs.slice().reverse(); // đuôi -> đầu
   }
-  const linePts = pts.map(p => p.x.toFixed(1) + "," + p.y.toFixed(1)).join(" ");
-  return { linePts, tri: arrowTri(head, d) };
+  return { d: roundedPath(pts, (CELL + GAP) * 0.4), tri: arrowTri(head, d) };
 }
 
 function drawPiece(svg, piece, opts) {
-  const color = (opts && opts.color) || (piece.mother ? "#e8c25a" : pieceColor(piece.id));
+  const color = (opts && opts.color) || (piece.mother ? "#e8c25a"
+    : ((colorMode === "game" && piece.fixedColor >= 1 && gameColor(piece.fixedColor)) || pieceColor(piece.id)));
   const sw = Math.max(2, CELL * (piece.mother ? 0.15 : 0.10));   // rắn mẹ dày hơn (viền)
   const geom = pieceGeom(piece.cells, piece.dir);
   const g = svgEl("g");
-  const line = svgEl("polyline");
-  line.setAttribute("points", geom.linePts);
+  const line = svgEl("path");
+  line.setAttribute("d", geom.d);
   line.setAttribute("fill", "none");
   line.setAttribute("stroke", color);
   line.setAttribute("stroke-width", sw);
@@ -699,7 +769,7 @@ function handleCellClick(x, y) {
 }
 
 // ---------- Play ----------
-function liveFrom(pieces) { return pieces.map(p => ({ id: state.nextId++, dir: p.dir, cells: p.cells.map(c => ({...c})), mother: !!p.mother })); }
+function liveFrom(pieces) { return pieces.map(p => ({ id: state.nextId++, dir: p.dir, cells: p.cells.map(c => ({...c})), mother: !!p.mother, ...(typeof p.fixedColor === "number" ? { fixedColor: p.fixedColor } : {}) })); }
 
 function snapshot() { return { pieces: state.pieces.map(p => ({ id:p.id, dir:p.dir, cells:p.cells.map(c=>({...c})) })), moves: state.moves, status: state.status }; }
 
@@ -728,35 +798,55 @@ function escapePiece(p) {
   const head = centers[0];
   const ext = state.W + state.H + n + 3;
   for (let k = 1; k <= ext; k++) track.push({ x: head.x + d.x * spacing * k, y: head.y + d.y * spacing * k });
-  const Lbody = (n - 1) * spacing;
-  const wpx = parseFloat(board.style.width), hpx = parseFloat(board.style.height);
 
-  function arcPoint(dist) {
-    if (dist <= 0) return track[0];
-    let acc = 0;
-    for (let i = 0; i < track.length - 1; i++) {
-      const a = track[i], b = track[i + 1];
-      const seg = Math.hypot(b.x - a.x, b.y - a.y);
-      if (acc + seg >= dist) { const t = (dist - acc) / seg; return { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t }; }
-      acc += seg;
+  // Quỹ đạo MƯỢT: bo tròn các góc rồi rải mẫu dày -> thân rắn là 1 dải liền, không gãy thành mảnh.
+  const R = spacing * 0.4;
+  const smooth = [track[0]];
+  for (let i = 1; i < track.length - 1; i++) {
+    const p0 = track[i - 1], p1 = track[i], p2 = track[i + 1];
+    const v1x = p1.x - p0.x, v1y = p1.y - p0.y, l1 = Math.hypot(v1x, v1y) || 1;
+    const v2x = p2.x - p1.x, v2y = p2.y - p1.y, l2 = Math.hypot(v2x, v2y) || 1;
+    const rr = Math.min(R, l1 / 2, l2 / 2);
+    const ax = p1.x - v1x / l1 * rr, ay = p1.y - v1y / l1 * rr;
+    const bx = p1.x + v2x / l2 * rr, by = p1.y + v2y / l2 * rr;
+    smooth.push({ x: ax, y: ay });
+    if (Math.abs(v1x * v2y - v1y * v2x) > 0.5) {   // có gập -> rải cung cho mượt
+      for (let s = 1; s < 8; s++) { const tt = s / 8, mt = 1 - tt;
+        smooth.push({ x: mt*mt*ax + 2*mt*tt*p1.x + tt*tt*bx, y: mt*mt*ay + 2*mt*tt*p1.y + tt*tt*by }); }
     }
-    return track[track.length - 1];
+    smooth.push({ x: bx, y: by });
+  }
+  smooth.push(track[track.length - 1]);
+  const cum = [0];
+  for (let i = 1; i < smooth.length; i++) cum.push(cum[i - 1] + Math.hypot(smooth[i].x - smooth[i - 1].x, smooth[i].y - smooth[i - 1].y));
+  const totalLen = cum[cum.length - 1];
+  function smoothPoint(dist) {
+    dist = dist < 0 ? 0 : dist > totalLen ? totalLen : dist;
+    let lo = 1, hi = cum.length - 1;
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (cum[mid] < dist) lo = mid + 1; else hi = mid; }
+    const t = (dist - cum[lo - 1]) / ((cum[lo] - cum[lo - 1]) || 1);
+    return { x: smooth[lo - 1].x + (smooth[lo].x - smooth[lo - 1].x) * t, y: smooth[lo - 1].y + (smooth[lo].y - smooth[lo - 1].y) * t };
   }
 
-  const speed = spacing / 75;     // px mỗi ms (~1 ô / 75ms)
+  const Lbody = totalLen - ext * spacing;   // chiều dài thân theo quỹ đạo mượt (đuôi -> đầu)
+  const wpx = parseFloat(board.style.width), hpx = parseFloat(board.style.height);
+  const speed = spacing / 78, accelT = 170, bodyStep = spacing / 6;   // rải dày 6 mẫu/ô
   let startT = null;
   function frame(ts) {
     if (startT === null) startT = ts;
-    const slid = (ts - startT) * speed;
+    const e = ts - startT;
+    // ease-in: tăng tốc 0 -> tối đa rồi trượt đều (liên tục cả vị trí lẫn vận tốc)
+    const slid = e < accelT ? 0.5 * speed * (e * e / accelT) : speed * (e - accelT / 2);
+    const headD = slid + Lbody, tailD = slid;
     const pts = [];
-    for (let i = 0; i < n; i++) pts.push(arcPoint(Lbody + slid - i * spacing));  // pts[0]=đầu
+    for (let dist = headD; dist > tailD; dist -= bodyStep) pts.push(smoothPoint(dist));
+    pts.push(smoothPoint(tailD));
     if (refs) {
-      refs.line.setAttribute("points", pts.map(q => q.x.toFixed(1) + "," + q.y.toFixed(1)).join(" "));
+      refs.line.setAttribute("d", "M" + pts.map(q => q.x.toFixed(1) + "," + q.y.toFixed(1)).join(" L"));
       refs.tri.setAttribute("points", arrowTri(pts[0], d));
     }
-    const tail = pts[n - 1];
-    const off = tail.x < -CELL || tail.x > wpx + CELL || tail.y < -CELL || tail.y > hpx + CELL;
-    if (off) { if (refs && refs.g) refs.g.remove(); return; }
+    const tail = pts[pts.length - 1];
+    if (tail.x < -CELL || tail.x > wpx + CELL || tail.y < -CELL || tail.y > hpx + CELL) { if (refs && refs.g) refs.g.remove(); return; }
     requestAnimationFrame(frame);
   }
   requestAnimationFrame(frame);
@@ -959,6 +1049,8 @@ function doGenerate() {
   elMsg.textContent = (target ? `✓ Sinh xong · điểm ${d.score} (muốn ${target})` : `✓ Đã sinh ${got} rắn`) + note;
 }
 function toggleDeps() { state.showDeps = !state.showDeps; $("depBtn").classList.toggle("active", state.showDeps); renderDeps(); }
+function syncColorBtn() { const b = $("colorModeBtn"); if (b) { b.textContent = colorMode === "game" ? "🎨 Màu: Game" : "🎨 Màu: Cầu vồng"; b.classList.toggle("active", colorMode === "game"); } }
+function toggleColorMode() { colorMode = colorMode === "game" ? "rainbow" : "game"; syncColorBtn(); render(); }
 
 function buildExportLevel() {
   const grid = Array.from({ length: state.editH }, () => Array.from({ length: state.editW }, () => 0));
@@ -981,7 +1073,7 @@ function validateLevel(lv, w, h) {
   });
   return e;
 }
-function normPieces(pieces) { return pieces.map(p => ({ dir: p.dir, cells: p.cells.map(c => Array.isArray(c) ? { x:c[0], y:c[1] } : { x:c.x, y:c.y }), mother: !!p.mother })); }
+function normPieces(pieces) { return pieces.map(p => ({ dir: p.dir, cells: p.cells.map(c => Array.isArray(c) ? { x:c[0], y:c[1] } : { x:c.x, y:c.y }), mother: !!p.mother, ...(typeof p.fixedColor === "number" ? { fixedColor: p.fixedColor } : {}) })); }
 
 function autoPar() {
   finalizeDraft();
@@ -995,26 +1087,37 @@ function autoPar() {
 function exportJSON() {
   finalizeDraft();
   const lv = buildExportLevel();
-  $("jsonBox").value = JSON.stringify(lv, null, 2);
   const errs = validateLevel(lv, state.editW, state.editH);
   if (errs.length) { elMsg.className = "msg lose"; elMsg.textContent = "⚠ " + errs[0]; return; }
+  const d = state.difficulty || computeDifficulty(state.editPieces, state.editW, state.editH);
+  const game = toGameLevel(state.editPieces, state.editW, state.editH, d && d.tier !== "KẸT" ? d.score : 0);
+  $("jsonBox").value = JSON.stringify(game, null, 2);   // FORMAT GAME (XSize/YSize/Arrows + Y-FLIP)
   const s = solve(state.editPieces, state.editW, state.editH);
-  if (!s.solvable) { elMsg.className = "msg warn"; elMsg.textContent = `⚠ Đã export nhưng KẸT (còn ${s.stuck})`; }
-  else { elMsg.className = "msg win"; elMsg.textContent = `✓ Export OK — giải được, par ${s.par}`; }
+  if (!s.solvable) { elMsg.className = "msg warn"; elMsg.textContent = `⚠ Đã export (format game) nhưng KẸT (còn ${s.stuck})`; }
+  else { elMsg.className = "msg win"; elMsg.textContent = `✓ Export format game — giải được, par ${s.par}`; }
 }
 function importJSON() {
   let lv; try { lv = JSON.parse($("jsonBox").value); } catch { elMsg.className = "msg lose"; elMsg.textContent = "✗ JSON không hợp lệ"; return; }
-  const w = (lv.grid && lv.grid[0]) ? lv.grid[0].length : lv.w;
-  const h = lv.grid ? lv.grid.length : lv.h;
-  if (!w || !h) { elMsg.className = "msg lose"; elMsg.textContent = "✗ Thiếu kích thước"; return; }
-  if (!Array.isArray(lv.pieces)) { elMsg.className = "msg lose"; elMsg.textContent = "✗ Thiếu mảng pieces"; return; }
-  const errs = validateLevel(lv, w, h);
+  let w, h, pieces, fmt;
+  if (isGameFormat(lv)) {                                  // format game thật
+    const g = fromGameLevel(lv); w = g.w; h = g.h; pieces = g.pieces; fmt = "format game";
+    if (!w || !h) { elMsg.className = "msg lose"; elMsg.textContent = "✗ Thiếu XSize/YSize"; return; }
+  } else {                                                 // format cũ {grid|w,h, pieces}
+    w = (lv.grid && lv.grid[0]) ? lv.grid[0].length : lv.w;
+    h = lv.grid ? lv.grid.length : lv.h;
+    if (!w || !h) { elMsg.className = "msg lose"; elMsg.textContent = "✗ Thiếu kích thước"; return; }
+    if (!Array.isArray(lv.pieces)) { elMsg.className = "msg lose"; elMsg.textContent = "✗ Thiếu mảng pieces"; return; }
+    pieces = normPieces(lv.pieces); fmt = "format cũ";
+  }
+  const errs = validateLevel({ pieces }, w, h);
   if (errs.length) { elMsg.className = "msg lose"; elMsg.textContent = "⚠ " + errs[0]; return; }
   state.editW = w; state.editH = h;
-  state.editPieces = normPieces(lv.pieces).map(p => ({ id: state.nextId++, dir: p.dir, cells: p.cells }));
+  state.editPieces = pieces.map(p => ({ id: state.nextId++, dir: p.dir, cells: p.cells.map(c => ({ ...c })),
+    ...(typeof p.fixedColor === "number" ? { fixedColor: p.fixedColor } : {}), ...(p.mother ? { mother: true } : {}) }));
   state.draft = null;
-  $("gridW").value = w; $("gridH").value = h; $("parInput").value = lv.par || state.editPieces.length;
-  elMsg.className = "msg win"; elMsg.textContent = "✓ Đã import"; render();
+  if (state.editPieces.some(p => p.fixedColor >= 1)) { colorMode = "game"; syncColorBtn(); }   // file có màu game -> bật chế độ Màu Game
+  $("gridW").value = w; $("gridH").value = h; $("parInput").value = state.editPieces.length;
+  elMsg.className = "msg win"; elMsg.textContent = "✓ Đã import (" + fmt + ")"; render();
 }
 function testPlay() {
   finalizeDraft();
@@ -1064,6 +1167,7 @@ $("clearBtn").addEventListener("click", clearGrid);
 $("resizeBtn").addEventListener("click", resizeGrid);
 $("genBtn").addEventListener("click", doGenerate);
 $("depBtn").addEventListener("click", toggleDeps);
+$("colorModeBtn").addEventListener("click", toggleColorMode);
 $("exportBtn").addEventListener("click", exportJSON);
 $("importBtn").addEventListener("click", importJSON);
 

@@ -249,8 +249,16 @@
     const all = arr.concat(mothers);
     const d = computeDifficulty(all, W, H);
     if (d.tier === "KẸT") return null;
+    // Chỉ số chi tiết
+    const a = analyzeSolve(all, W, H);
+    const area = mask ? mask.size : W * H;
+    let covered = 0;
+    for (const p of all) for (const c of p.cells) if (!mask || mask.has(c.x + "," + c.y)) covered++;
+    const fillReal = area ? Math.round(covered / area * 100) : 0;
     return {
       w: W, h: H, par: all.length, score: d.score, tier: d.tier, emoji: d.emoji,
+      fillReal, empty: Math.max(0, area - covered), turns: a.turns,
+      t1Pct: all.length ? Math.round(a.t1Avail / all.length * 100) : 0, stuck: a.stuck,
       pieces: all.map(p => ({ dir: p.dir, cells: p.cells.map(c => [c.x, c.y]), ...(p.mother ? { mother: true } : {}) })),
     };
   }
@@ -271,7 +279,9 @@ self.onmessage = function (e) {
     var lvl = null;
     for (var r = 0; r < 3 && !lvl; r++) {
       var cand = genLevelCore(m.W, m.H, mask, m.targets[i], m.params);
-      if (cand) lvl = cand;
+      if (!cand) continue;
+      if (m.params.fill > 0 && Math.abs(cand.fillReal - m.params.fill * 100) > 3 && r < 2) continue;  // fill lệch setting -> thử lại
+      lvl = cand;
     }
     out.push(lvl);
     if ((i & 7) === 7) self.postMessage({ type: 'progress', n: m.n, done: i + 1 });
@@ -355,6 +365,7 @@ self.onmessage = function (e) {
       for (let r = 0; r < 3 && !lvl; r++) {
         const cand = genLevelCore(W, H, mask, targets[i], params);
         if (!cand) continue;
+        if (params.fill > 0 && Math.abs(cand.fillReal - params.fill * 100) > 3 && r < 2) continue;  // fill lệch setting -> thử lại
         if (dedup) { const sig = levelSignature(cand.pieces); if (seen.has(sig)) { if (r < 2) continue; skipped++; break; } seen.add(sig); }
         lvl = cand;
       }
@@ -364,6 +375,27 @@ self.onmessage = function (e) {
       }
     }
     return { made, skipped };
+  }
+
+  // ---------- Đo dải độ khó của board (probe nhiều mức fill) ----------
+  async function measureRange() {
+    if (B.generating) return;
+    const mask = currentMask();
+    if ((B.layoutType === "image" || B.layoutType === "paint") && (!mask || !mask.size)) { $b("bMeasureInfo").textContent = "⚠ Mask rỗng — chỉnh layout trước."; return; }
+    const W = B.W, H = B.H, diff = clamp(+$b("bDiff").value, 0, 100), longPref = clamp(+$b("bLong").value, 0, 100);
+    const fills = (W * H > 1500) ? [0.40, 0.62, 0.85] : [0.35, 0.50, 0.65, 0.80, 0.92];
+    $b("bMeasureInfo").textContent = "Đang đo…";
+    const scores = [];
+    for (const f of fills) {
+      for (let k = 0; k < 2; k++) {
+        const arr = generateMap(W, H, longPref, diff, 0, { mask: mask || null, overflow: 0, fill: f, bounds: null });
+        if (arr.length >= 2 && solve(arr, W, H).solvable) { const d = computeDifficulty(arr, W, H); if (d.tier !== "KẸT") scores.push(d.score); }
+        await new Promise(r => requestAnimationFrame(r));
+      }
+    }
+    if (!scores.length) { $b("bMeasureInfo").textContent = "Không đo được (board quá nhỏ / mask rỗng?)."; return; }
+    const min = Math.min(...scores), max = Math.max(...scores), avg = Math.round(scores.reduce((a, b) => a + b, 0) / scores.length);
+    $b("bMeasureInfo").innerHTML = `Board này sinh được khó <b>${min}–${max}</b> (TB ${avg}). Đặt curve trong dải này để không bị lệch target.`;
   }
 
   // ---------- Sinh hàng loạt ----------
@@ -429,7 +461,7 @@ self.onmessage = function (e) {
     for (let x = 0; x < W; x++) { ctx.beginPath(); ctx.moveTo(ox + (x + 0.5) * cell, oy + 0.5 * cell); ctx.lineTo(ox + (x + 0.5) * cell, oy + (H - 0.5) * cell); ctx.stroke(); }
     for (let y = 0; y < H; y++) { ctx.beginPath(); ctx.moveTo(ox + 0.5 * cell, oy + (y + 0.5) * cell); ctx.lineTo(ox + (W - 0.5) * cell, oy + (y + 0.5) * cell); ctx.stroke(); }
     lvl.pieces.forEach((p, i) => {
-      const color = p.mother ? "#e8c25a" : pieceColor(i);
+      const color = p.mother ? "#e8c25a" : ((colorMode === "game" && p.fixedColor >= 1 && gameColor(p.fixedColor)) || pieceColor(i));
       ctx.strokeStyle = color; ctx.fillStyle = color;
       ctx.lineWidth = Math.max(1, cell * 0.34); ctx.lineCap = "round"; ctx.lineJoin = "round";
       const pts = p.cells.map(c => ({ x: ox + (c[0] + 0.5) * cell, y: oy + (c[1] + 0.5) * cell }));
@@ -476,7 +508,10 @@ self.onmessage = function (e) {
       top.append(chk, badge); card.appendChild(top);
       const cv = document.createElement("canvas"); cv.width = 120; cv.height = 120; cv._level = lvl; card.appendChild(cv); io.observe(cv);
       const meta = document.createElement("div"); meta.className = "lc-top";
-      meta.innerHTML = `<span>#${lvl.id}</span><span>${lvl.pieces.length} rắn</span>`; card.appendChild(meta);
+      meta.innerHTML = `<span>#${lvl.id}</span><span>${lvl.pieces.length} rắn${lvl.fillReal != null ? " · " + lvl.fillReal + "%" : ""}</span>`; card.appendChild(meta);
+      card.title = `Điểm ${lvl.score} ${lvl.tier}` + (lvl.target != null ? ` (muốn ${lvl.target})` : "")
+        + `\nRắn: ${lvl.pieces.length} · Lấp đầy: ${lvl.fillReal != null ? lvl.fillReal + "%" : "—"} · Trống: ${lvl.empty != null ? lvl.empty + " ô" : "—"}`
+        + `\nLượt giải: ${lvl.turns != null ? lvl.turns : "—"} · Thoát ngay lượt 1: ${lvl.t1Pct != null ? lvl.t1Pct + "%" : "—"} · Kẹt: ${lvl.stuck != null ? lvl.stuck : 0}`;
       const act = document.createElement("div"); act.className = "lc-actions";
       const playB = document.createElement("button"); playB.textContent = "▶"; playB.title = "Chơi"; playB.addEventListener("click", () => playLibrary(lvl.id));
       const delB = document.createElement("button"); delB.textContent = "🗑"; delB.className = "danger"; delB.title = "Xóa"; delB.addEventListener("click", () => deleteLevel(lvl.id));
@@ -557,27 +592,34 @@ self.onmessage = function (e) {
     a.href = url; a.download = name; document.body.appendChild(a); a.click();
     setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 120);
   }
-  function levelExport(lvl) { return { w: lvl.w, h: lvl.h, par: lvl.par, score: lvl.score, tier: lvl.tier, target: lvl.target, pieces: lvl.pieces }; }
+  // Level -> object FORMAT GAME (Y-FLIP, Indices...) thuần. + bản pack (kèm metadata để re-import).
+  function gamePure(lvl) { return toGameLevel(lvl.pieces, lvl.w, lvl.h, lvl.tier !== "KẸT" ? lvl.score : 0); }
+  function packLevelOf(lvl) {
+    return Object.assign(gamePure(lvl), {
+      score: lvl.score, tier: lvl.tier, target: lvl.target,
+      fillReal: lvl.fillReal, empty: lvl.empty, turns: lvl.turns, t1Pct: lvl.t1Pct, stuck: lvl.stuck
+    });
+  }
 
-  function exportZip() {
+  function exportZip() {   // MỖI FILE = 1 LEVEL đúng format game
     const sel = selectedLevels();
     if (!sel.length) { $b("bSelInfo").textContent = "Chưa chọn level nào để export."; return; }
     const pad = Math.max(3, String(sel.length).length);
-    const manifest = { generatedBy: "Arrow Out batch", count: sel.length, board: { w: B.W, h: B.H }, layout: B.layoutType, levels: [] };
+    const manifest = { generatedBy: "Arrow Out batch", format: "game (XSize/YSize/Arrows, Y-flip)", count: sel.length, board: { w: B.W, h: B.H }, layout: B.layoutType, levels: [] };
     const files = [];
     sel.forEach((lvl, i) => {
       const name = "level" + String(i + 1).padStart(pad, "0") + ".json";
-      files.push({ name, str: JSON.stringify(levelExport(lvl), null, 2) });
-      manifest.levels.push({ file: name, id: lvl.id, score: lvl.score, tier: lvl.tier, snakes: lvl.pieces.length });
+      files.push({ name, str: JSON.stringify(gamePure(lvl), null, 2) });
+      manifest.levels.push({ file: name, id: lvl.id, score: lvl.score, tier: lvl.tier, snakes: lvl.pieces.length, fillReal: lvl.fillReal, empty: lvl.empty, turns: lvl.turns, t1Pct: lvl.t1Pct, stuck: lvl.stuck });
     });
     files.push({ name: "manifest.json", str: JSON.stringify(manifest, null, 2) });
     download(zipStore(files), `arrowout-levels-${sel.length}.zip`);
-    $b("bSelInfo").textContent = `✓ Đã export ${sel.length} level (ZIP)`;
+    $b("bSelInfo").textContent = `✓ Đã export ${sel.length} level (ZIP, format game)`;
   }
-  function exportPack() {
+  function exportPack() {   // 1 file gộp (format game + metadata) để re-import vào tool
     const sel = selectedLevels();
     if (!sel.length) { $b("bSelInfo").textContent = "Chưa chọn level nào để export."; return; }
-    const pack = { generatedBy: "Arrow Out batch", board: { w: B.W, h: B.H }, layout: B.layoutType, levels: sel.map(levelExport) };
+    const pack = { generatedBy: "Arrow Out batch", format: "game+meta", board: { w: B.W, h: B.H }, layout: B.layoutType, levels: sel.map(packLevelOf) };
     download(new Blob([JSON.stringify(pack, null, 2)], { type: "application/json" }), `arrowout-pack-${sel.length}.json`);
     $b("bSelInfo").textContent = `✓ Đã export pack ${sel.length} level`;
   }
@@ -585,18 +627,25 @@ self.onmessage = function (e) {
     const fr = new FileReader();
     fr.onload = () => {
       let data; try { data = JSON.parse(fr.result); } catch { $b("bSelInfo").textContent = "✗ File JSON không hợp lệ"; return; }
-      const arr = Array.isArray(data) ? data : data.levels;
-      if (!Array.isArray(arr)) { $b("bSelInfo").textContent = "✗ Không thấy mảng levels"; return; }
+      const arr = Array.isArray(data) ? data : (isGameFormat(data) ? [data] : data.levels);   // 1 level game lẻ / mảng / pack
+      if (!Array.isArray(arr)) { $b("bSelInfo").textContent = "✗ Không thấy level nào"; return; }
       let startId = nextLibId(), added = 0;
       for (const o of arr) {
-        if (!o || !Array.isArray(o.pieces)) continue;
-        const w = o.w || (o.grid && o.grid[0] ? o.grid[0].length : 0), h = o.h || (o.grid ? o.grid.length : 0);
-        if (!w || !h) continue;
-        const pieces = o.pieces.map(p => ({ dir: p.dir, cells: p.cells.map(c => Array.isArray(c) ? [c[0], c[1]] : [c.x, c.y]), ...(p.mother ? { mother: true } : {}) }));
+        let w, h, pieces;
+        if (isGameFormat(o)) {                                  // format game (lẻ hoặc trong pack)
+          const g = fromGameLevel(o); w = g.w; h = g.h;
+          pieces = g.pieces.map(p => ({ dir: p.dir, cells: p.cells.map(c => [c.x, c.y]), ...(typeof p.fixedColor === "number" ? { fixedColor: p.fixedColor } : {}) }));
+        } else {                                                // format cũ {w,h,pieces}
+          if (!o || !Array.isArray(o.pieces)) continue;
+          w = o.w || (o.grid && o.grid[0] ? o.grid[0].length : 0); h = o.h || (o.grid ? o.grid.length : 0);
+          pieces = o.pieces.map(p => ({ dir: p.dir, cells: p.cells.map(c => Array.isArray(c) ? [c[0], c[1]] : [c.x, c.y]), ...(p.mother ? { mother: true } : {}) }));
+        }
+        if (!w || !h || !pieces.length) continue;
         const live = normPieces(pieces);
         const d = computeDifficulty(live, w, h);
         const id = startId++;
-        B.library.push({ w, h, par: o.par || pieces.length, score: o.score != null ? o.score : d.score, tier: o.tier || d.tier, emoji: d.emoji, target: o.target, pieces, id });
+        B.library.push({ w, h, par: o.par || pieces.length, score: o.score != null ? o.score : d.score, tier: o.tier || d.tier, emoji: d.emoji, target: o.target,
+          fillReal: o.fillReal, empty: o.empty, turns: o.turns, t1Pct: o.t1Pct, stuck: o.stuck, pieces, id });
         B.selection.add(id); added++;
       }
       saveLibrary(); renderLibrary();
@@ -698,6 +747,7 @@ self.onmessage = function (e) {
   }
   $b("bFill").addEventListener("input", syncFillLabel);
   $b("bCount").addEventListener("input", updateCurveInfo);
+  $b("bMeasure").addEventListener("click", measureRange);
   $b("bGenerate").addEventListener("click", runBatch);
   $b("bCancel").addEventListener("click", () => { B.cancel = true; if (B.cancelParallel) B.cancelParallel(); });
 

@@ -81,11 +81,11 @@
       </div>
 
       <div class="row" style="margin-top:14px; border-top:1px solid var(--line); padding-top:12px">
-        <label class="fld" title="Thấp = nhiều con thoát ngay (thoáng) … cao = chuỗi phụ thuộc sâu, dày">Thiên hướng: <b id="genDiffVal">50</b>
+        <label class="fld" title="Độ rối / phụ thuộc khi đặt rắn. Thấp = thoáng, nhiều con thoát ngay; Cao = rắn chặn nhau nhiều, chuỗi phụ thuộc sâu (khó hơn).">Độ phụ thuộc: <b id="genDiffVal">50</b>
           <input type="range" id="genDiff" min="0" max="100" value="50" /></label>
       </div>
       <div class="row">
-        <label class="fld" title="Cao = ưu tiên 'nút thắt' — 1 con bị nhiều con khác cùng phụ thuộc">Độ bọc: <b id="genWrapVal">20</b>
+        <label class="fld" title="Cao = ưu tiên 'nút thắt': 1 con bị NHIỀU con khác cùng phụ thuộc (giải sai 1 bước là kẹt).">Nút thắt: <b id="genWrapVal">20</b>
           <input type="range" id="genWrap" min="0" max="100" value="20" /></label>
       </div>
       <div class="row">
@@ -102,8 +102,9 @@
       </div>
       <div class="row">
         <button id="depBtn" class="toggle" style="flex:1">🔗 Phụ thuộc</button>
-        <div class="hint" id="genInfo" style="flex:2; align-self:center"></div>
+        <button id="colorModeBtn" style="flex:1" title="Đổi cách tô màu rắn: Cầu vồng (mỗi rắn 1 màu) ⇄ Game (theo 48 màu ColorType từ file)">🎨 Màu: Cầu vồng</button>
       </div>
+      <div class="row"><div class="hint" id="genInfo" style="flex:1"></div></div>
 
       <div class="row" style="margin-top:14px; border-top:1px solid var(--line); padding-top:12px">
         <span class="hint"><b>Ảnh → Map</b> · nạp ảnh, chỉnh ngưỡng/độ gắt xem trước (ô sáng = vùng đặt rắn), rồi chốt tạo map. Dùng kích thước bàn hiện tại làm ma trận. <b>Khi có ảnh, generator ưu tiên LẤP ĐẦY cho hình đẹp</b>; "Điểm muốn" chỉ là phụ.</span>
@@ -118,7 +119,7 @@
           <input type="range" id="imgTh" min="0" max="255" value="128" /></label>
       </div>
       <div class="row">
-        <label class="fld" style="flex:1">Độ gắt: <b id="imgHarshVal">40</b>%
+        <label class="fld" style="flex:1" title="% diện tích 1 ô phải tối thì ô đó mới tính là vùng đặt rắn. Cao = chỉ lấy phần tối đậm (hình nhỏ/sắc); thấp = lấy cả phần mờ.">Ngưỡng phủ ô: <b id="imgHarshVal">40</b>%
           <input type="range" id="imgHarsh" min="1" max="100" value="40" /></label>
       </div>
       <div class="row">
@@ -189,7 +190,7 @@
               <input type="range" id="bImgTh" min="0" max="255" value="128" /></label>
           </div>
           <div class="row">
-            <label class="fld" style="flex:1">Độ gắt: <b id="bImgHarshVal">40</b>%
+            <label class="fld" style="flex:1" title="% diện tích 1 ô phải tối thì ô đó mới tính là vùng đặt rắn. Cao = chỉ lấy phần tối đậm; thấp = lấy cả phần mờ.">Ngưỡng phủ ô: <b id="bImgHarshVal">40</b>%
               <input type="range" id="bImgHarsh" min="1" max="100" value="40" /></label>
           </div>
         </div>
@@ -223,12 +224,16 @@
           <label class="fld">Số level <input type="number" id="bCount" min="1" max="1000" value="300" /></label>
           <div class="hint" id="bCurveInfo" style="flex:2; align-self:flex-end"></div>
         </div>
+        <div class="row" style="margin-top:10px">
+          <button id="bMeasure" style="flex:1" title="Sinh thử vài map trên layout + tham số hiện tại để biết board này gen được khó từ bao nhiêu tới bao nhiêu → đặt curve cho đúng dải.">📊 Đo dải độ khó của board</button>
+        </div>
+        <div class="hint" id="bMeasureInfo" style="margin-top:4px"></div>
       </div>
 
       <div class="card">
         <h2>3 · Tham số sinh</h2>
         <div class="row">
-          <label class="fld" title="Thấp = thoáng, nhiều con thoát ngay … cao = chuỗi phụ thuộc sâu">Thiên hướng: <b id="bDiffVal">50</b>
+          <label class="fld" title="Độ rối / phụ thuộc khi đặt rắn. Thấp = thoáng; Cao = rắn chặn nhau nhiều, chuỗi phụ thuộc sâu (khó hơn).">Độ phụ thuộc: <b id="bDiffVal">50</b>
             <input type="range" id="bDiff" min="0" max="100" value="50" /></label>
         </div>
         <div class="row">
