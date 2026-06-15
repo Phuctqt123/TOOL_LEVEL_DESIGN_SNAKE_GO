@@ -12,7 +12,7 @@
 
   const B = state.batch = {
     layoutType: "rect", W: 20, H: 20, scale: 0.9,
-    maskImg: null, paint: new Set(),
+    maskImg: null, maskTainted: false, paint: new Set(),
     curve: [{ t: 0, v: 12 }, { t: 1, v: 90 }],
     library: [], selection: new Set(), displayOrder: [],
     sort: "index", filter: "all",
@@ -66,9 +66,11 @@
     if (t === "circle") return maskEllipse(W, H, s);
     if (t === "diamond") return maskDiamond(W, H, s);
     if (t === "image") {
-      if (!B.maskImg) return new Set();
-      const th = clamp(+$b("bImgTh").value, 0, 255), harsh = clamp(+$b("bImgHarsh").value, 1, 100) / 100;
-      return scaleMask(computeMask(B.maskImg, W, H, th, harsh), W, H, s);
+      if (!B.maskImg || B.maskTainted) return new Set();
+      try {
+        const th = clamp(+$b("bImgTh").value, 0, 255), harsh = clamp(+$b("bImgHarsh").value, 1, 100) / 100;
+        return scaleMask(computeMask(B.maskImg, W, H, th, harsh), W, H, s);
+      } catch (e) { B.maskTainted = true; return new Set(); }   // ảnh web bị CORS chặn đọc pixel
     }
     if (t === "paint") return scaleMask(new Set(B.paint), W, H, s);
     return null;
@@ -593,6 +595,55 @@ self.onmessage = function (e) {
     fr.readAsText(file);
   }
 
+  // ---------- Nạp ảnh: file máy + kéo từ web ----------
+  function loadImageBlob(blob, onOK) {
+    const url = URL.createObjectURL(blob), img = new Image();
+    img.onload = () => { URL.revokeObjectURL(url); onOK(img, false); };
+    img.onerror = () => { URL.revokeObjectURL(url); $b("bLayoutInfo").textContent = "⚠ Không đọc được ảnh."; };
+    img.src = url;
+  }
+  // Tải ảnh từ URL (kéo từ web). Thử có CORS trước (để đọc được pixel), lỗi thì thử lại không CORS.
+  function loadImageURL(url, onOK) {
+    const attempt = cors => {
+      const img = new Image();
+      if (cors) img.crossOrigin = "anonymous";
+      img.onload = () => onOK(img, true);
+      img.onerror = () => { if (cors) attempt(false); else $b("bLayoutInfo").textContent = "⚠ Không tải được ảnh từ link (bị chặn). Hãy lưu ảnh về máy rồi bấm 'Chọn ảnh'."; };
+      img.src = url;
+    };
+    attempt(true);
+  }
+  // Lấy ảnh từ dữ liệu kéo-thả: ưu tiên file, rồi tới URL (uri-list / <img src> / text).
+  function imageFromDataTransfer(dt, onImage) {
+    const f = dt.files && [...dt.files].find(x => x.type && x.type.startsWith("image/"));
+    if (f) { loadImageBlob(f, onImage); return true; }
+    let url = (dt.getData("text/uri-list") || "").split("\n").map(s => s.trim()).find(s => s && !s.startsWith("#"));
+    if (!url) { const html = dt.getData("text/html"); const m = html && html.match(/<img[^>]+\bsrc\s*=\s*["']([^"']+)["']/i); if (m) url = m[1]; }
+    if (!url) { const t = (dt.getData("text/plain") || "").trim(); if (/^https?:\/\//i.test(t) || /^data:image\//i.test(t)) url = t; }
+    if (url) { loadImageURL(url, onImage); return true; }
+    return false;
+  }
+  // Nạp ảnh vào batch: kiểm tra taint (ảnh web không cho đọc pixel) + tự chuyển layout sang "Từ ảnh".
+  function setBatchImage(img, fromWeb) {
+    B.maskImg = img; B.maskTainted = false;
+    if (fromWeb) {
+      try { const c = document.createElement("canvas"); c.width = c.height = 1; const x = c.getContext("2d"); x.drawImage(img, 0, 0, 1, 1); x.getImageData(0, 0, 1, 1); }
+      catch (e) { B.maskTainted = true; }
+    }
+    if (B.layoutType !== "image") { $b("bLayoutType").value = "image"; setLayoutType("image"); } else renderPreview();
+    $b("bLayoutInfo").textContent = B.maskTainted
+      ? "⚠ Ảnh web này chặn đọc pixel (CORS). Hãy lưu ảnh về máy rồi bấm 'Chọn ảnh'."
+      : `Ảnh ${img.naturalWidth}×${img.naturalHeight} đã nạp${fromWeb ? " (kéo từ web)" : ""}.`;
+  }
+  function makeDropZone(el, onImage, onMiss) {
+    el.addEventListener("dragover", e => { e.preventDefault(); e.dataTransfer.dropEffect = "copy"; el.classList.add("dropping"); });
+    el.addEventListener("dragleave", e => { if (e.target === el) el.classList.remove("dropping"); });
+    el.addEventListener("drop", e => {
+      e.preventDefault(); el.classList.remove("dropping");
+      if (!imageFromDataTransfer(e.dataTransfer, onImage) && onMiss) onMiss();
+    });
+  }
+
   // ---------- Wiring ----------
   function setLayoutType(t) {
     B.layoutType = t;
@@ -613,11 +664,12 @@ self.onmessage = function (e) {
   $b("bImgBtn").addEventListener("click", () => $b("bImg").click());
   $b("bImg").addEventListener("change", () => {
     const f = $b("bImg").files[0]; if (!f || !f.type.startsWith("image/")) return;
-    const url = URL.createObjectURL(f), img = new Image();
-    img.onload = () => { URL.revokeObjectURL(url); B.maskImg = img; renderPreview(); $b("bLayoutInfo").textContent = `Ảnh ${img.naturalWidth}×${img.naturalHeight} đã nạp.`; };
-    img.src = url;
+    loadImageBlob(f, setBatchImage);
   });
-  $b("bImgClear").addEventListener("click", () => { B.maskImg = null; renderPreview(); });
+  $b("bImgClear").addEventListener("click", () => { B.maskImg = null; B.maskTainted = false; renderPreview(); });
+  // Kéo-thả ảnh (từ máy hoặc từ web) vào khung xem trước / vùng ảnh.
+  makeDropZone(document.querySelector(".layout-preview-wrap"), setBatchImage, () => { $b("bLayoutInfo").textContent = "⚠ Không thấy ảnh trong nội dung kéo vào."; });
+  makeDropZone($b("bImageRow"), setBatchImage, () => { $b("bLayoutInfo").textContent = "⚠ Không thấy ảnh trong nội dung kéo vào."; });
   $b("bScale").addEventListener("input", () => { B.scale = clamp(+$b("bScale").value, 40, 100) / 100; $b("bScaleVal").textContent = $b("bScale").value; renderPreview(); updateCurveInfo(); });
   $b("bMother").addEventListener("change", () => {
     if ($b("bMother").checked && B.scale > 0.97) { $b("bScale").value = 90; B.scale = 0.9; $b("bScaleVal").textContent = "90"; }
@@ -663,6 +715,28 @@ self.onmessage = function (e) {
     state.mode = "batch"; state.fromLibrary = null; state.draft = null;
     syncModeUI(); renderPreview(); updateCurveInfo(); renderLibrary();
   });
+
+  // Kéo-thả ảnh vào board khi đang ở Editor (Ảnh → Map). Dùng lại hàm global của arrow-out.js.
+  (function wireEditorDrop() {
+    const board = document.getElementById("board"); if (!board) return;
+    board.addEventListener("dragover", e => { if (state.mode !== "edit") return; e.preventDefault(); e.dataTransfer.dropEffect = "copy"; board.classList.add("dropping"); });
+    board.addEventListener("dragleave", () => board.classList.remove("dropping"));
+    board.addEventListener("drop", e => {
+      if (state.mode !== "edit") return;
+      e.preventDefault(); board.classList.remove("dropping");
+      const ok = imageFromDataTransfer(e.dataTransfer, (img, fromWeb) => {
+        let tainted = false;
+        if (fromWeb) { try { const c = document.createElement("canvas"); c.width = c.height = 1; const x = c.getContext("2d"); x.drawImage(img, 0, 0, 1, 1); x.getImageData(0, 0, 1, 1); } catch (e2) { tainted = true; } }
+        if (tainted) { state.maskImg = null; setMaskInfo("⚠ Ảnh web chặn CORS — lưu về máy rồi 'Chọn ảnh'.", "warn"); return; }
+        state.maskImg = img; refreshMask(); render();
+        setMaskInfo(`Ảnh ${img.naturalWidth}×${img.naturalHeight} đã nạp (kéo vào). Chỉnh Ngưỡng/Độ gắt rồi 'Tạo map từ ảnh'.`);
+      });
+      if (!ok) setMaskInfo("⚠ Không thấy ảnh trong nội dung kéo.", "warn");
+    });
+  })();
+  // Chặn trình duyệt điều hướng/mở ảnh khi lỡ thả ra ngoài vùng nhận.
+  window.addEventListener("dragover", e => { if (e.dataTransfer && [...e.dataTransfer.types].some(t => t === "Files" || t === "text/uri-list")) e.preventDefault(); });
+  window.addEventListener("drop", e => { if (e.dataTransfer && [...e.dataTransfer.types].some(t => t === "Files" || t === "text/uri-list")) e.preventDefault(); });
 
   // ---------- Boot ----------
   loadCurve(); loadLibrary();

@@ -82,7 +82,9 @@ textarea { width:100%; background:var(--panel2); color:var(--text); border:1px s
   border-radius:8px; cursor:crosshair; touch-action:none; display:block; }
 .curve-preset { padding:6px 9px; min-height:34px; font-size:12px; }
 
-.layout-preview-wrap { display:flex; justify-content:center; background:var(--cell); border-radius:8px; padding:10px; }
+.layout-preview-wrap { display:flex; justify-content:center; background:var(--cell); border-radius:8px; padding:10px; position:relative; }
+.layout-preview-wrap.dropping, #bImageRow.dropping { outline:2px dashed var(--accent); outline-offset:2px; background:rgba(79,159,255,.07); }
+#board.dropping { outline:2px dashed var(--accent); outline-offset:-2px; }
 .layout-preview { max-width:100%; image-rendering:pixelated; border-radius:6px; }
 .layout-preview.paintable { cursor:cell; touch-action:none; }
 
