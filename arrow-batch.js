@@ -257,6 +257,7 @@
     return B.layoutType === "paint" ? Math.max(16, Math.min(30, Math.floor(560 / m))) : Math.max(4, Math.floor(440 / m));
   }
   function drawCellPv(ctx, x, y, on, cell) {
+    ctx.clearRect(x * cell, y * cell, cell, cell);   // xóa trước (màu bán trong suốt sẽ chồng lên nhau nếu không)
     ctx.fillStyle = on ? "rgba(79,159,255,0.34)" : "rgba(255,255,255,0.03)";
     ctx.fillRect(x * cell, y * cell, cell, cell);
     ctx.strokeStyle = "rgba(255,255,255,0.10)"; ctx.lineWidth = 1;
