@@ -24,47 +24,7 @@ function enforceHeadDir(piece) {
 const PALETTE = ["#4f9fff","#46c08a","#e0b84f","#e0586a","#b06ae0","#4fd0e0","#e08a4f","#88c850","#e04fa0","#7a86e0","#c0a44f","#4fc0a0"];
 function pieceColor(id) { return PALETTE[id % PALETTE.length]; }
 
-// ---------- Built-in levels ----------
-function P(dir, ...cells) { return { dir, cells: cells.map(c => ({ x:c[0], y:c[1] })) }; }
-function LV(w, h, pieces) { return { w, h, pieces, par: pieces.length }; }
-
-const LEVELS = [
-  LV(5, 5, [
-    P("right",[1,2]), P("right",[2,2]), P("right",[3,2]),
-    P("up",[0,0]), P("down",[4,4]),
-  ]),
-  LV(6, 6, [
-    P("left",[1,1]), P("left",[1,2]),
-    P("right",[4,1]), P("right",[4,2]),
-    P("up",[2,4]), P("up",[2,5]), P("up",[3,4]), P("up",[3,5]),
-  ]),
-  LV(7, 7, [
-    P("up",[2,1]), P("up",[2,2]), P("up",[2,3]),
-    P("down",[4,3]), P("down",[4,4]), P("down",[4,5]),
-    P("right",[4,2]), P("right",[5,2]),
-    P("left",[0,6]), P("left",[1,6]),
-  ]),
-  LV(8, 8, [
-    P("up",[1,3]), P("up",[1,4]), P("up",[1,5]),
-    P("down",[6,2]), P("down",[6,3]), P("down",[6,4]),
-    P("left",[3,1]), P("left",[4,1]), P("left",[5,1]),
-    P("right",[2,6]), P("right",[3,6]), P("right",[4,6]),
-  ]),
-  LV(8, 8, [
-    P("up",[1,2]), P("up",[1,3]), P("up",[1,4]),
-    P("down",[6,3]), P("down",[6,4]), P("down",[6,5]),
-    P("left",[3,1]), P("left",[4,1]), P("left",[5,1]),
-    P("right",[2,6]), P("right",[3,6]), P("right",[4,6]),
-    P("up",[0,0]), P("down",[7,7]),
-  ]),
-  // 6 — DEMO RẮN: thân nhiều ô, có cái bẻ cong (L) nhưng ĐẦU LUÔN THẲNG, có chuỗi phụ thuộc.
-  LV(6, 6, [
-    P("right",[4,1],[3,1],[2,1]),   // ngang, thoát ngay
-    P("up",[1,4],[1,5],[2,5]),      // bẻ cong (đầu thẳng lên, thân quẹo phải)
-    P("up",[3,3],[3,4],[3,5]),      // bị con #1 chặn (phụ thuộc)
-    P("left",[4,4],[5,4],[5,5]),    // bẻ cong, bị con #3 chặn (phụ thuộc)
-  ]),
-];
+// (Đã bỏ level mẫu — chỉ vào chế độ chơi khi Test level đang tạo hoặc chơi từ Thư viện hàng loạt)
 
 // ---------- State ----------
 const state = {
@@ -197,8 +157,7 @@ function depMetrics(pieces, w, h) {
 // ---------- Đo độ khó (port từ tool difficulty-gen) ----------
 // Mô hình: solver "natural-turn" (mỗi lượt MỌI rắn thoát được thì thoát đồng thời),
 // kết hợp "bẫy thị giác" (perceptual) — nhìn tưởng đi được nhưng bị chặn lệch góc nhỏ.
-// Điểm = 0.16·turns + 0.08·snakes + 0.16·rate + 0.60·perceptualĐộng. Tier 5 mức.
-// (số lượng rắn cố ý NHẸ CÂN: độ khó đến từ chuỗi phụ thuộc/tốc độ giải/bẫy thị giác, không phải nhồi rắn)
+// Điểm = 0.10·turns + 0.20·snakes + 0.10·rate + 0.60·perceptualĐộng. Tier 5 mức.
 function movableList(rest, w, h) {
   const occ = new Map();
   for (const p of rest) for (const c of p.cells) occ.set(c.x + "," + c.y, p.id);
@@ -286,7 +245,7 @@ function computeDifficulty(pieces, w, h) {
   const turnsScore = Math.max(0, Math.min(100, Math.log2(Math.max(1, a.turns)) / Math.log2(50) * 100));
   const snakeScore = Math.max(0, Math.min(100, Math.log2(Math.max(1, a.snakes)) / Math.log2(140) * 100));
   const percScore  = percDynamic(pieces, w, h);
-  const score = Math.round(0.16 * turnsScore + 0.08 * snakeScore + 0.16 * rateScore + 0.60 * percScore);
+  const score = Math.round(0.10 * turnsScore + 0.20 * snakeScore + 0.10 * rateScore + 0.60 * percScore);
   const [, tier, emoji] = DIFF_TIERS.find(t => score < t[0]);
   return { score, tier, emoji, breakdown: { turnsScore, snakeScore, rateScore, percScore } };
 }
@@ -371,11 +330,15 @@ function generateMap(w, h, longPref, difficulty, wrapping, opts) {
 
   let pieces = []; let id = 1, placed = 0, tries = 0;
   while (covered.size < targetCov && placed < cap && tries < maxTries) {
+    // Độ dài MONG MUỐN giảm dần theo độ phủ -> ĐẶT RẮN DÀI TRƯỚC, rắn ngắn lấp khe sau.
+    // longPref cao -> giữ rắn dài lâu hơn (ít rắn vụn). Vẫn ưu tiên rắn dài hơn qua wLen + chấm điểm.
+    const frac = targetCov ? covered.size / targetCov : 1;
+    const Lwant = Math.max(2, Math.round(maxL - frac * (1 - lp * 0.5) * (maxL - 2)));
     let best = null, bestScore = -Infinity;
     for (let s = 0; s < 18; s++) {
       tries++;
       const [hx, hy] = pickHead();
-      const cand = growSnake(hx, hy, DIRS[rint(4)], snakeLen(lp, maxL), pieces, w, h, id, allow);
+      const cand = growSnake(hx, hy, DIRS[rint(4)], Lwant, pieces, w, h, id, allow);
       if (!cand) continue;
       const test = pieces.concat([cand]);
       if (!solve(test, w, h).solvable) continue;
@@ -738,17 +701,6 @@ function handleCellClick(x, y) {
 // ---------- Play ----------
 function liveFrom(pieces) { return pieces.map(p => ({ id: state.nextId++, dir: p.dir, cells: p.cells.map(c => ({...c})), mother: !!p.mother })); }
 
-function loadLevel(i) {
-  const lv = LEVELS[i];
-  state.fromLibrary = null;
-  state.levelIndex = i; state.W = lv.w; state.H = lv.h;
-  state.pieces = liveFrom(lv.pieces);
-  state.moves = 0; state.par = lv.par; state.history = []; state.status = "playing";
-  highlightLevels(); render();
-  refreshDifficulty(state.pieces, state.W, state.H);
-  const s = solve(state.pieces, state.W, state.H);
-  if (!s.solvable) { elMsg.className = "msg warn"; elMsg.textContent = "⚠ Level này hiện bị kẹt (không giải được)"; }
-}
 function snapshot() { return { pieces: state.pieces.map(p => ({ id:p.id, dir:p.dir, cells:p.cells.map(c=>({...c})) })), moves: state.moves, status: state.status }; }
 
 function onPieceTap(id) {
@@ -830,13 +782,10 @@ function undo() {
   buildPieces(); renderDeps(); updateStatus();
 }
 function resetLevel() {
-  if (state.levelIndex === -1) {
-    if (!state.testSnapshot) return;
-    state.pieces = liveFrom(state.testSnapshot);
-    state.moves = 0; state.history = []; state.status = "playing";
-    buildPieces(); updateStatus(); return;
-  }
-  loadLevel(state.levelIndex);
+  if (!state.testSnapshot) return;
+  state.pieces = liveFrom(state.testSnapshot);
+  state.moves = 0; state.history = []; state.status = "playing";
+  buildPieces(); updateStatus();
 }
 function hint() {
   if (state.mode !== "play" || state.status !== "playing") return;
@@ -847,13 +796,9 @@ function hint() {
 }
 
 // ---------- Editor ----------
-function enterEditor(fromCurrent) {
+function enterEditor() {
   state.mode = "edit"; state.draft = null; state.fromLibrary = null;
-  if (fromCurrent && state.levelIndex >= 0) {
-    const lv = LEVELS[state.levelIndex];
-    state.editW = lv.w; state.editH = lv.h;
-    state.editPieces = liveFrom(lv.pieces);
-  } else if (!state._editorInit) {
+  if (!state._editorInit) {
     state.editW = 7; state.editH = 7; state.editPieces = [];
   }
   state._editorInit = true;
@@ -863,11 +808,9 @@ function enterEditor(fromCurrent) {
   refreshDifficulty(state.editPieces, state.editW, state.editH);
   syncModeUI(); render();
 }
-function enterPlay() { state.mode = "play"; state.draft = null; syncModeUI(); loadLevel(state.levelIndex < 0 ? 0 : state.levelIndex); }
 
 function syncModeUI() {
   const edit = state.mode === "edit", batch = state.mode === "batch", play = state.mode === "play";
-  $("modePlay").classList.toggle("active", play);
   $("modeEdit").classList.toggle("active", edit);
   const mb = $("modeBatch"); if (mb) mb.classList.toggle("active", batch);
   // Ẩn/hiện khu chơi-editor vs khu hàng loạt
@@ -878,7 +821,6 @@ function syncModeUI() {
   $("editControls").style.display = edit ? "flex" : "none";
   $("playHint").style.display = (edit || batch) ? "none" : "block";
   $("editorCard").style.display = edit ? "block" : "none";
-  $("levelCard").style.display = (edit || batch) ? "none" : "block";
   const lpb = $("libPlayBar"); if (lpb) lpb.style.display = (play && state.fromLibrary != null) ? "flex" : "none";
 }
 
@@ -1084,7 +1026,7 @@ function testPlay() {
   state.testSnapshot = state.editPieces.map(p => ({ dir: p.dir, cells: p.cells.map(c => ({...c})) }));
   state.pieces = liveFrom(state.testSnapshot);
   state.moves = 0; state.par = s.par; state.history = []; state.status = "playing";
-  syncModeUI(); highlightLevels(); render();
+  syncModeUI(); render();
   refreshDifficulty(state.pieces, state.W, state.H);
   if (!s.solvable) { elMsg.className = "msg warn"; elMsg.textContent = `⚠ Test: level bị kẹt (còn ${s.stuck})`; }
 }
@@ -1110,26 +1052,11 @@ function diffText(d) {
     (b ? ` <span style="color:var(--muted)">(bẫy ${Math.round(b.percScore)}·lượt ${Math.round(b.turnsScore)}·rắn ${Math.round(b.snakeScore)}·tốc ${Math.round(b.rateScore)})</span>` : "");
 }
 
-// ---------- Level buttons ----------
-function buildLevelButtons() {
-  const list = $("levelList"); list.innerHTML = "";
-  LEVELS.forEach((_, i) => {
-    const b = document.createElement("button");
-    b.className = "level-btn toggle"; b.textContent = i + 1;
-    b.addEventListener("click", () => { if (state.mode !== "play") { state.mode = "play"; state.draft = null; syncModeUI(); } loadLevel(i); });
-    list.appendChild(b);
-  });
-}
-function highlightLevels() {
-  [...$("levelList").children].forEach((b, i) => b.classList.toggle("active", state.mode === "play" && i === state.levelIndex));
-}
-
 // ---------- Wire up ----------
 $("hintBtn").addEventListener("click", hint);
 $("undoBtn").addEventListener("click", undo);
 $("resetBtn").addEventListener("click", resetLevel);
-$("modePlay").addEventListener("click", enterPlay);
-$("modeEdit").addEventListener("click", () => enterEditor(false));
+$("modeEdit").addEventListener("click", enterEditor);
 $("finishBtn").addEventListener("click", () => { finalizeDraft(); render(); });
 $("testBtn").addEventListener("click", testPlay);
 $("autoParBtn").addEventListener("click", autoPar);
@@ -1182,4 +1109,4 @@ document.addEventListener("keydown", e => {
 window.addEventListener("resize", () => render());
 
 // ---------- Boot ----------
-buildLevelButtons(); syncModeUI(); loadLevel(0);
+enterEditor();   // khởi động ở Editor (không còn level mẫu)
