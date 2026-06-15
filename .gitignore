@@ -1,0 +1,11 @@
+# Claude Code local config
+.claude/
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+*.swp
+
+# Exported level packs (artifacts, not source)
+arrowout-levels-*.zip
+arrowout-pack-*.json

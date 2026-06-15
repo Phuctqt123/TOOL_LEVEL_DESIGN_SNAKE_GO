@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+<title>Arrow Out</title>
+<link rel="stylesheet" href="arrow-out.css" />
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div>
+      <h1>Arrow <span>Out</span></h1>
+      <div class="sub">Công cụ thiết kế & test level nội bộ — mũi tên dạng rắn nhiều ô</div>
+    </div>
+    <div style="display:flex; gap:8px">
+      <button id="modePlay" class="toggle active">▶ Chơi</button>
+      <button id="modeEdit" class="toggle">✎ Editor</button>
+      <button id="modeBatch" class="toggle">📦 Hàng loạt</button>
+    </div>
+  </header>
+
+  <div class="board-area">
+    <div class="statusbar">
+      <div class="pill">Level <b id="levelLabel">1</b></div>
+      <div class="pill">Nước đi <b id="moveCount">0</b> / <span id="parCount">—</span> par</div>
+      <div class="pill">Còn lại <b id="leftCount">0</b></div>
+      <div class="pill" title="Điểm độ khó 0–100 (đo từ số lượt giải, số rắn, tốc độ, bẫy thị giác)">Khó <b id="diffLabel">—</b></div>
+      <div class="msg" id="msg"></div>
+    </div>
+
+    <div class="controls" id="libPlayBar" style="display:none;">
+      <button id="libBackBtn">← Thư viện</button>
+      <button id="libPrevBtn">◀ Trước</button>
+      <span class="pill" id="libPlayLabel" style="align-self:center"></span>
+      <button id="libNextBtn">Sau ▶</button>
+    </div>
+
+    <div class="board-outer"><div id="board"></div></div>
+
+    <div class="controls" id="playControls">
+      <button id="hintBtn">💡 Gợi ý</button>
+      <button id="undoBtn">↶ Hoàn tác</button>
+      <button id="resetBtn">⟲ Chơi lại</button>
+    </div>
+    <div class="hint" id="playHint">
+      Bấm vào một <b>con rắn</b> để phóng nó ra khỏi bàn theo hướng đầu. Thân trườn theo vệt của đầu.
+      Nếu tia đi của đầu bị rắn khác chặn (hoặc chạm vào chính thân mình) thì không thoát được nhưng
+      <b>vẫn tính 1 nước</b>. Dọn sạch hết với ít nước nhất — bí quyết là <b>đúng thứ tự</b>.
+    </div>
+
+    <div class="controls" id="editControls" style="display:none;">
+      <button id="finishBtn">✓ Xong rắn</button>
+      <button id="testBtn" class="primary">▶ Test thử</button>
+      <button id="autoParBtn">Kiểm tra</button>
+      <button id="clearBtn" class="danger">Xóa hết</button>
+    </div>
+  </div>
+
+  <div class="side">
+    <div class="card" id="levelCard">
+      <h2>Các level</h2>
+      <div class="level-list" id="levelList"></div>
+    </div>
+
+    <div class="card" id="editorCard" style="display:none;">
+      <h2>Editor</h2>
+      <div class="row">
+        <label class="fld">Rộng <input type="number" id="gridW" min="3" max="50" value="7" /></label>
+        <label class="fld">Cao <input type="number" id="gridH" min="3" max="50" value="7" /></label>
+        <button id="resizeBtn" style="align-self:flex-end">Đổi cỡ</button>
+      </div>
+
+      <div class="row" style="margin-top:12px"><span class="hint">Hướng đầu rắn (rồi bấm các ô để vẽ thân):</span></div>
+      <div class="tool-grid">
+        <button class="toggle tool active" data-tool="up">↑</button>
+        <button class="toggle tool" data-tool="down">↓</button>
+        <button class="toggle tool" data-tool="left">←</button>
+        <button class="toggle tool" data-tool="right">→</button>
+        <button class="toggle tool" data-tool="erase">⌫</button>
+      </div>
+      <div class="hint" style="margin-top:8px">
+        <b>Vẽ rắn:</b> bấm 1 ô trống = đặt <b>đầu</b> (mũi tên). Bấm ô <b>kề bên</b> để nối thân (rắn có thể bẻ cong).
+        Bấm lại vào đầu hoặc <b>✓ Xong rắn</b> để kết thúc, rồi vẽ con tiếp theo. Đổi hướng đầu bằng các nút ↑↓←→
+        (chỉ khi rắn mới có 1 ô — từ ô thứ 2 trở đi <b>hướng đầu tự thẳng theo cổ</b> để không quẹo gấp).
+        Chọn <b>⌫</b> rồi bấm 1 con để xóa cả con.
+      </div>
+
+      <div class="row" style="margin-top:14px; border-top:1px solid var(--line); padding-top:12px">
+        <label class="fld" title="Thấp = nhiều con thoát ngay (thoáng) … cao = chuỗi phụ thuộc sâu, dày">Thiên hướng: <b id="genDiffVal">50</b>
+          <input type="range" id="genDiff" min="0" max="100" value="50" /></label>
+      </div>
+      <div class="row">
+        <label class="fld" title="Cao = ưu tiên 'nút thắt' — 1 con bị nhiều con khác cùng phụ thuộc">Độ bọc: <b id="genWrapVal">20</b>
+          <input type="range" id="genWrap" min="0" max="100" value="20" /></label>
+      </div>
+      <div class="row">
+        <label class="fld" title="0 = ưu tiên rắn NGẮN (lấp khít, hợp ảnh) … 100 = ưu tiên rắn DÀI">Ưu tiên rắn dài: <b id="genLongVal">40</b>
+          <input type="range" id="genLong" min="0" max="100" value="40" /></label>
+      </div>
+      <div class="row">
+        <label class="fld" title="Điểm độ khó muốn nhắm. 0 = tự chọn; >0 = sinh nhiều kiểu, giữ map gần điểm này nhất.">Điểm muốn: <b id="genTargetVal">0</b> <span style="color:var(--muted)">(0 = tự động)</span>
+          <input type="range" id="genTarget" min="0" max="100" value="0" /></label>
+      </div>
+      <div class="row" style="align-items:center">
+        <label class="chk" title="Thêm 1 viền ôm sát bao quanh TẤT CẢ, có mỏ thoát. Buộc click rắn mẹ trước."><input type="checkbox" id="genMother" /> Rắn mẹ (viền ôm sát)</label>
+        <button id="genBtn" class="primary" style="flex:1">🎲 Sinh map</button>
+      </div>
+      <div class="row">
+        <button id="depBtn" class="toggle" style="flex:1">🔗 Phụ thuộc</button>
+        <div class="hint" id="genInfo" style="flex:2; align-self:center"></div>
+      </div>
+
+      <div class="row" style="margin-top:14px; border-top:1px solid var(--line); padding-top:12px">
+        <span class="hint"><b>Ảnh → Map</b> · nạp ảnh, chỉnh ngưỡng/độ gắt xem trước (ô sáng = vùng đặt rắn), rồi chốt tạo map. Dùng kích thước bàn hiện tại làm ma trận. <b>Khi có ảnh, generator ưu tiên LẤP ĐẦY cho hình đẹp</b>; "Điểm muốn" chỉ là phụ.</span>
+      </div>
+      <input type="file" id="mapImg" accept="image/*" hidden />
+      <div class="row" style="margin-top:8px">
+        <button id="mapImgBtn" style="flex:1">🖼️ Chọn ảnh</button>
+        <button id="mapImgClear" style="flex:1">Bỏ ảnh</button>
+      </div>
+      <div class="row" style="margin-top:8px">
+        <label class="fld" style="flex:1">Ngưỡng: <b id="imgThVal">128</b>
+          <input type="range" id="imgTh" min="0" max="255" value="128" /></label>
+      </div>
+      <div class="row">
+        <label class="fld" style="flex:1">Độ gắt: <b id="imgHarshVal">40</b>%
+          <input type="range" id="imgHarsh" min="1" max="100" value="40" /></label>
+      </div>
+      <div class="row">
+        <label class="fld" style="flex:1" title="Tỉ lệ ô '1' phải được phủ (không để trống) — cao = map giống ảnh hơn, nhiều rắn hơn">Độ lấp đầy: <b id="imgFillVal">85</b>%
+          <input type="range" id="imgFill" min="0" max="100" value="85" /></label>
+      </div>
+      <div class="row" style="margin-top:8px">
+        <button id="mapFromImgBtn" class="primary" style="flex:1">✓ Tạo map từ ảnh</button>
+      </div>
+      <div class="hint" id="maskInfo" style="margin-top:6px"></div>
+
+      <div class="row" style="margin-top:12px">
+        <label class="fld">Par <input type="number" id="parInput" min="1" max="999" value="1" /></label>
+        <div class="hint" style="flex:2; align-self:flex-end">Par = số rắn (mỗi con 1 nước). Bấm <b>Kiểm tra</b> để xác nhận giải được.</div>
+      </div>
+
+      <div class="row" style="margin-top:12px">
+        <button id="exportBtn" style="flex:1">Export JSON</button>
+        <button id="importBtn" style="flex:1">Import JSON</button>
+      </div>
+      <textarea id="jsonBox" spellcheck="false" placeholder="JSON của level hiện ở đây khi Export. Dán vào rồi Import để nạp."></textarea>
+    </div>
+
+    <div class="card">
+      <h2>Luật chơi</h2>
+      <div class="hint">
+        Mỗi con rắn có <b>hướng đầu cố định</b> và thân nhiều ô (có thể cong). Bấm → đầu đi thẳng ra rìa, thân trườn theo.
+        Thoát được khi tia đi của đầu <b>trống</b> (không vướng rắn khác, không vướng thân mình). Dọn sạch là thắng.
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ HÀNG LOẠT (batch) ============ -->
+  <div id="batchView" style="display:none;">
+    <!-- Cột trái: cấu hình -->
+    <div class="batch-settings">
+      <div class="card">
+        <h2>1 · Layout</h2>
+        <div class="row">
+          <label class="fld" style="flex:2">Dạng layout
+            <select id="bLayoutType">
+              <option value="rect">Vuông / chữ nhật</option>
+              <option value="circle">Tròn / elip</option>
+              <option value="diamond">Thoi (diamond)</option>
+              <option value="image">Từ ảnh (silhouette)</option>
+              <option value="paint">Tự vẽ (paint ô)</option>
+            </select>
+          </label>
+        </div>
+        <div class="row" style="margin-top:8px">
+          <label class="fld">Rộng <input type="number" id="bW" min="3" max="60" value="20" /></label>
+          <label class="fld">Cao <input type="number" id="bH" min="3" max="60" value="20" /></label>
+          <button id="bApplySize" style="align-self:flex-end">Đổi cỡ</button>
+        </div>
+        <div class="row" style="margin-top:8px">
+          <label class="fld" title="Thu/phóng hình bên trong bàn. <100% sẽ chừa lề quanh hình để rắn mẹ có chỗ ôm viền.">Kích thước layout: <b id="bScaleVal">90</b>%
+            <input type="range" id="bScale" min="40" max="100" value="90" /></label>
+        </div>
+
+        <div id="bImageRow" style="display:none">
+          <div class="row" style="margin-top:8px">
+            <input type="file" id="bImg" accept="image/*" hidden />
+            <button id="bImgBtn" style="flex:1">🖼️ Chọn ảnh</button>
+            <button id="bImgClear" style="flex:1">Bỏ ảnh</button>
+          </div>
+          <div class="row" style="margin-top:8px">
+            <label class="fld" style="flex:1">Ngưỡng: <b id="bImgThVal">128</b>
+              <input type="range" id="bImgTh" min="0" max="255" value="128" /></label>
+          </div>
+          <div class="row">
+            <label class="fld" style="flex:1">Độ gắt: <b id="bImgHarshVal">40</b>%
+              <input type="range" id="bImgHarsh" min="1" max="100" value="40" /></label>
+          </div>
+        </div>
+
+        <div id="bPaintRow" class="hint" style="display:none; margin-top:8px">
+          Bấm vào ô trong khung xem trước để <b>bật/tắt</b> vùng đặt rắn. Kéo để vẽ nhanh.
+          <div class="row" style="margin-top:6px">
+            <button id="bPaintFill" style="flex:1">Bật hết</button>
+            <button id="bPaintClear" style="flex:1">Xóa hết</button>
+            <button id="bPaintInvert" style="flex:1">Đảo</button>
+          </div>
+        </div>
+        <div class="hint" id="bLayoutInfo" style="margin-top:8px"></div>
+      </div>
+
+      <div class="card">
+        <h2>2 · Difficulty curve</h2>
+        <div class="hint" style="margin-bottom:6px">
+          Kéo điểm để chỉnh độ khó theo tiến trình. <b>Nhấp đúp</b> nền = thêm điểm · <b>chuột phải</b> điểm = xóa.
+        </div>
+        <canvas id="bCurve" width="300" height="160" class="curve-canvas"></canvas>
+        <div class="row" style="margin-top:8px">
+          <span class="hint">Preset:</span>
+          <button class="curve-preset" data-preset="linear">Tuyến tính</button>
+          <button class="curve-preset" data-preset="easein">Ease-in</button>
+          <button class="curve-preset" data-preset="scurve">S-curve</button>
+          <button class="curve-preset" data-preset="steps">Bậc thang</button>
+          <button class="curve-preset" data-preset="saw">Răng cưa</button>
+        </div>
+        <div class="row" style="margin-top:10px">
+          <label class="fld">Số level <input type="number" id="bCount" min="1" max="1000" value="300" /></label>
+          <div class="hint" id="bCurveInfo" style="flex:2; align-self:flex-end"></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>3 · Tham số sinh</h2>
+        <div class="row">
+          <label class="fld" title="Thấp = thoáng, nhiều con thoát ngay … cao = chuỗi phụ thuộc sâu">Thiên hướng: <b id="bDiffVal">50</b>
+            <input type="range" id="bDiff" min="0" max="100" value="50" /></label>
+        </div>
+        <div class="row">
+          <label class="fld" title="0 = rắn ngắn (lấp khít) … 100 = rắn dài">Ưu tiên rắn dài: <b id="bLongVal">40</b>
+            <input type="range" id="bLong" min="0" max="100" value="40" /></label>
+        </div>
+        <div class="row">
+          <label class="fld" title="Tỉ lệ ô vùng chơi bị rắn phủ. 0 = tự động (quét mật độ để khớp difficulty curve); >0 = cố định mật độ (độ khó là kết quả thực tế, curve chỉ tham khảo).">Độ lấp đầy: <b id="bFillVal">0</b><span id="bFillAuto" style="color:var(--muted)"> (tự động)</span>
+            <input type="range" id="bFill" min="0" max="100" value="0" /></label>
+        </div>
+        <div class="row" style="align-items:center">
+          <label class="chk" title="Thêm 1 viền rắn mẹ ôm sát hình"><input type="checkbox" id="bMother" /> Rắn mẹ (viền ôm)</label>
+          <label class="chk" title="Bỏ qua các level trùng hệt nhau"><input type="checkbox" id="bDedup" checked /> Bỏ trùng</label>
+        </div>
+        <div class="row" style="align-items:center">
+          <label class="chk" title="Sinh nhiều luồng bằng Web Worker để nhanh hơn (tự chuyển 1 luồng nếu trình duyệt chặn)"><input type="checkbox" id="bParallel" checked /> Xử lý song song <span class="hint" id="bCores"></span></label>
+        </div>
+        <div class="row" style="margin-top:10px">
+          <button id="bGenerate" class="primary" style="flex:1">🎲 Sinh hàng loạt</button>
+          <button id="bCancel" class="danger" style="display:none">■ Hủy</button>
+        </div>
+        <div class="progress" id="bProgWrap" style="display:none"><div class="progress-bar" id="bProgBar"></div></div>
+        <div class="hint" id="bProgInfo" style="margin-top:6px"></div>
+      </div>
+    </div>
+
+    <!-- Cột phải: preview + thư viện -->
+    <div class="batch-work">
+      <div class="card">
+        <h2>Xem trước layout</h2>
+        <div class="layout-preview-wrap"><canvas id="bPreview" class="layout-preview"></canvas></div>
+      </div>
+
+      <div class="card" id="bLibCard">
+        <div class="lib-toolbar">
+          <h2 style="margin:0">Thư viện <span id="bLibCount" class="pill">0</span></h2>
+          <div class="lib-tools">
+            <label class="fld" style="flex:0 0 auto">Sắp xếp
+              <select id="bSort">
+                <option value="index">Thứ tự sinh</option>
+                <option value="scoreAsc">Khó tăng dần</option>
+                <option value="scoreDesc">Khó giảm dần</option>
+              </select>
+            </label>
+            <label class="fld" style="flex:0 0 auto">Lọc tier
+              <select id="bFilter">
+                <option value="all">Tất cả</option>
+                <option value="1">★ Rất dễ</option>
+                <option value="2">★★ Dễ</option>
+                <option value="3">★★★ Vừa</option>
+                <option value="4">★★★★ Khó</option>
+                <option value="5">★★★★★ Siêu khó</option>
+              </select>
+            </label>
+          </div>
+        </div>
+        <div class="row" style="margin-top:8px">
+          <button id="bSelAll">Chọn hết</button>
+          <button id="bSelNone">Bỏ chọn</button>
+          <button id="bSelInvert">Đảo chọn</button>
+          <button id="bDelSel" class="danger">Xóa đã chọn</button>
+          <button id="bClearLib" class="danger">Xóa thư viện</button>
+          <span class="hint" id="bSelInfo" style="align-self:center"></span>
+        </div>
+        <div class="row" style="margin-top:8px">
+          <button id="bExportZip" class="primary">⬇ Export ZIP (đã chọn)</button>
+          <button id="bExportPack">⬇ Pack JSON</button>
+          <input type="file" id="bImportPack" accept=".json,application/json" hidden />
+          <button id="bImportBtn">⬆ Import pack</button>
+        </div>
+        <div class="lib-grid" id="bLibGrid"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="arrow-out.js"></script>
+<script src="arrow-batch.js"></script>
+</body>
+</html>
