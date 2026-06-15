@@ -327,7 +327,7 @@
   // Ưu tiên độ khó đúng (key = diffDelta·10 + fillDelta). Vòng ngoài quyết định nhận theo bậc.
   // Trả null nếu không sinh nổi map nào trong ±7/±7.
   function genLevelCore(W, H, mask, target, params) {
-    const WIDE = 7, MAX = params.fill > 0 ? 12 : 4;
+    const MAX = params.fill > 0 ? 12 : 4;
     const lps = [55, 25, 85, 40, 70, 15, 95, 50, 30, 65];
     let bestArr = null, bestKey = Infinity;
     for (let r = 0; r < MAX; r++) {
@@ -339,12 +339,11 @@
       if (pre.tier === "KẸT") continue;
       const fd = params.fill > 0 ? Math.abs(coverFrac(arr, mask, W, H) - params.fill * 100) : 0;
       const dd = target ? Math.abs(pre.score - target) : 0;
-      if (fd > WIDE || dd > WIDE) continue;
-      const key = dd * 10 + fd;   // ưu tiên độ khó đúng
+      const key = dd * 10 + fd;   // ưu tiên độ khó đúng, fill phụ — GIỮ map tốt nhất, KHÔNG tự loại
       if (key < bestKey) { bestKey = key; bestArr = arr; }
-      if (fd <= 3 && dd <= 3) break;   // bậc tốt nhất -> lấy luôn
+      if (fd <= 3 && dd <= 3) break;   // đã đạt bậc tốt nhất -> lấy luôn
     }
-    if (!bestArr) return null;
+    if (!bestArr) return null;   // board không sinh nổi map giải được (hiếm) -> worker phát heartbeat
     const arr = bestArr;
     let mothers = [];
     if (params.mother) { mothers = buildMother(arr, W, H, 1, mask ? Array.from(mask) : null); if (mothers.length && !solve(arr.concat(mothers), W, H).solvable) mothers = []; }
@@ -357,7 +356,6 @@
     const fillReal = area ? Math.round(covered / area * 100) : 0;
     const fillDelta = params.fill > 0 ? Math.abs(fillReal - params.fill * 100) : 0;
     const diffDelta = target ? Math.abs(d.score - target) : 0;
-    if (fillDelta > WIDE || diffDelta > WIDE) return null;   // rắn mẹ đẩy ra ngoài ±7 -> bỏ
     return {
       w: W, h: H, par: all.length, score: d.score, tier: d.tier, emoji: d.emoji,
       fillReal, empty: Math.max(0, area - covered), turns: a.turns,
@@ -406,9 +404,10 @@ self.onmessage = function (e) {
     const cores = navigator.hardwareConcurrency || 4;
     return Math.max(1, Math.min(cores, 8, Math.ceil(count / 4)));
   }
-  // Bậc chấp nhận [fillTol%, diffTol điểm] — ưu tiên độ khó đúng (nới fill trước, độ khó sau cùng).
-  const TIERS = [[3, 3], [5, 3], [7, 3], [7, 7]];
-  const ESCALATE = 140;   // số "trượt" liên tiếp ở 1 bậc -> nới lên bậc kế (KHÔNG giới hạn thời gian)
+  // Bậc chấp nhận [fillTol%, diffTol điểm] — ƯU TIÊN ĐỘ KHÓ ĐÚNG: nới fill rộng dần (fill=100% thường
+  // không thể đạt vì rắn ≥2 ô luôn để khe), chỉ nới độ khó ở 2 bậc cuối khi thật sự bí. Bậc cuối nhận mọi map.
+  const TIERS = [[3, 3], [5, 3], [7, 3], [12, 3], [100, 3], [100, 7], [100, 100]];
+  const ESCALATE = 120;   // số "trượt" liên tiếp ở 1 bậc -> nới lên bậc kế (KHÔNG giới hạn thời gian)
   const GIVEUP = 4000;    // ở bậc rộng nhất mà vẫn trượt tới mức này -> coi như board không sinh nổi (chống treo)
   // Sinh SONG SONG kiểu STREAM: worker stream level (kèm deltas); main nhận theo bậc, nới bậc khi kẹt.
   // resolve: 'done' | 'cancel' | 'exhausted' | 'fallback'.
@@ -488,11 +487,11 @@ self.onmessage = function (e) {
 
     const seen = new Set();
     let made = 0, mode = "1 luồng", errMsg = "", cancelled = false;
-    const tierCounts = [0, 0, 0, 0];   // [±3, ±5 fill, ±7 fill, ±7 cả độ khó]
+    const tierCounts = new Array(TIERS.length).fill(0);   // số level nhận ở mỗi bậc
     // mỗi level ĐẠT -> thêm thư viện + HIỆN CARD NGAY + tăng tiến độ (chỉ tăng khi đạt). Trả `made` mới.
     const onAccept = (lvl, tier) => {
       lvl.id = startId + made; lvl.tierUsed = tier; B.library.push(lvl); B.selection.add(lvl.id); made++;
-      if (tier >= 0 && tier < 4) tierCounts[tier]++;
+      if (tier >= 0 && tier < tierCounts.length) tierCounts[tier]++;
       appendLibCard(lvl);
       $b("bProgBar").style.width = Math.round(made / count * 100) + "%";
       $b("bProgInfo").textContent = `Đang sinh… ${made}/${count} đạt`;
@@ -516,9 +515,10 @@ self.onmessage = function (e) {
     } finally {
       B.generating = false; B.cancelParallel = null;
       $b("bGenerate").disabled = false; $b("bCancel").style.display = "none";
-      const relaxed = tierCounts[1] + tierCounts[2] + tierCounts[3];
-      const tierTxt = relaxed === 0 ? " (tất cả khít ±3%)"
-        : ` · ±3%: ${tierCounts[0]}` + (tierCounts[1] ? `, fill±5%: ${tierCounts[1]}` : "") + (tierCounts[2] ? `, fill±7%: ${tierCounts[2]}` : "") + (tierCounts[3] ? `, nới khó±7: ${tierCounts[3]}` : "");
+      let exact = tierCounts[0] || 0, fillR = 0, diffR = 0;   // gộp: khít ±3 / chỉ nới fill / phải nới độ khó
+      for (let i = 1; i < tierCounts.length; i++) { if (TIERS[i][1] <= 3) fillR += tierCounts[i]; else diffR += tierCounts[i]; }
+      const tierTxt = (fillR + diffR === 0) ? " (tất cả khít ±3%)"
+        : ` · ±3%: ${exact}` + (fillR ? `, nới fill: ${fillR}` : "") + (diffR ? `, nới độ khó: ${diffR}` : "");
       $b("bProgInfo").textContent = errMsg
         ? "✗ Lỗi khi sinh: " + errMsg + " — mở Console (F12) xem chi tiết."
         : (cancelled ? "⛔ Đã hủy · " : `✓ Xong (${mode}) · `)
