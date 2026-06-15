@@ -317,31 +317,21 @@
     cv.addEventListener("pointercancel", () => { painting = false; });
   })();
 
-  function coverFrac(pieces, mask, W, H) {   // % ô layout bị rắn phủ
-    const area = mask ? mask.size : W * H; let cov = 0;
-    for (const p of pieces) for (const c of p.cells) if (!mask || mask.has(c.x + "," + c.y)) cov++;
-    return area ? cov / area * 100 : 0;
-  }
   // ---------- Sinh 1 level theo target (pure — dùng cả ở main thread & worker) ----------
-  // Trả về map TỐT NHẤT nằm trong BẬC RỘNG NHẤT (fill ±7% VÀ độ khó ±7), KÈM fillDelta/diffDelta.
-  // Ưu tiên độ khó đúng (key = diffDelta·10 + fillDelta). Vòng ngoài quyết định nhận theo bậc.
-  // Trả null nếu không sinh nổi map nào trong ±7/±7.
+  // LUÔN LẤP ĐẦY bố cục (fill=1) rồi đo độ khó; trả map có độ khó GẦN target nhất (kèm diffDelta).
+  // Vòng ngoài chỉ nhận khi diffDelta ≤ ±3. Trả null nếu board không sinh nổi map giải được (hiếm).
   function genLevelCore(W, H, mask, target, params) {
-    const MAX = params.fill > 0 ? 12 : 4;
-    const lps = [55, 25, 85, 40, 70, 15, 95, 50, 30, 65];
-    let bestArr = null, bestKey = Infinity;
+    const MAX = 12;
+    const lps = [55, 25, 85, 40, 70, 15, 95, 50, 30, 65];   // đổi ưu-tiên-rắn-dài mỗi lần để đa dạng cách xếp
+    let bestArr = null, bestDd = Infinity;
     for (let r = 0; r < MAX; r++) {
-      const arr = params.fill > 0
-        ? generateMap(W, H, lps[r % lps.length], params.diff, 0, { mask: mask || null, overflow: 0, fill: params.fill, bounds: null })
-        : autoGenerate(W, H, params.diff, 0, params.longPref, mask || null, 0, null, target, null);
+      const arr = generateMap(W, H, lps[r % lps.length], params.diff, 0, { mask: mask || null, overflow: 0, fill: 1, bounds: null });
       if (!arr || arr.length < 2 || !solve(arr, W, H).solvable) continue;
       const pre = computeDifficulty(arr, W, H);
       if (pre.tier === "KẸT") continue;
-      const fd = params.fill > 0 ? Math.abs(coverFrac(arr, mask, W, H) - params.fill * 100) : 0;
       const dd = target ? Math.abs(pre.score - target) : 0;
-      const key = dd * 10 + fd;   // ưu tiên độ khó đúng, fill phụ — GIỮ map tốt nhất, KHÔNG tự loại
-      if (key < bestKey) { bestKey = key; bestArr = arr; }
-      if (fd <= 3 && dd <= 3) break;   // đã đạt bậc tốt nhất -> lấy luôn
+      if (dd < bestDd) { bestDd = dd; bestArr = arr; }
+      if (dd <= 3) break;   // đã khít -> lấy luôn
     }
     if (!bestArr) return null;   // board không sinh nổi map giải được (hiếm) -> worker phát heartbeat
     const arr = bestArr;
@@ -354,13 +344,12 @@
     const area = mask ? mask.size : W * H;
     let covered = 0; for (const p of all) for (const c of p.cells) if (!mask || mask.has(c.x + "," + c.y)) covered++;
     const fillReal = area ? Math.round(covered / area * 100) : 0;
-    const fillDelta = params.fill > 0 ? Math.abs(fillReal - params.fill * 100) : 0;
     const diffDelta = target ? Math.abs(d.score - target) : 0;
     return {
       w: W, h: H, par: all.length, score: d.score, tier: d.tier, emoji: d.emoji,
       fillReal, empty: Math.max(0, area - covered), turns: a.turns,
       t1Pct: all.length ? Math.round(a.t1Avail / all.length * 100) : 0, stuck: a.stuck,
-      fillDelta, diffDelta,
+      diffDelta,
       pieces: all.map(p => ({ dir: p.dir, cells: p.cells.map(c => [c.x, c.y]), ...(p.mother ? { mother: true } : {}) })),
     };
   }
@@ -389,7 +378,7 @@ self.onmessage = function (e) {
     if (B.workerURL) return B.workerURL;
     const fns = [clamp, inBoard, solve, depMetrics, movableList, analyzeSolve, percRisk, percDynamic,
       computeDifficulty, rint, shuffle, growSnake, snakeLen, generateMap, coverageCount, autoGenerate,
-      traceBorder, motherFromLoop, buildMother, dirFromTo, coverFrac, genLevelCore];
+      traceBorder, motherFromLoop, buildMother, dirFromTo, genLevelCore];
     let src = '"use strict";\n';
     src += "var DIRS=" + JSON.stringify(DIRS) + ";\n";
     src += "var DELTA=" + JSON.stringify(DELTA) + ";\n";
@@ -400,17 +389,15 @@ self.onmessage = function (e) {
     B.workerURL = URL.createObjectURL(new Blob([src], { type: "application/javascript" }));
     return B.workerURL;
   }
-  function workerCount(count) {
-    const cores = navigator.hardwareConcurrency || 4;
-    return Math.max(1, Math.min(cores, 8, Math.ceil(count / 4)));
+  function workerCount() {   // dùng HẾT số nhân CPU (bỏ trần 8) — vượt số nhân không nhanh hơn vì CPU-bound
+    return Math.max(2, navigator.hardwareConcurrency || 4);
   }
-  // VÉT CẠN CHÍNH XÁC: chỉ nhận map khít ±3 (cả fill lẫn độ khó), sinh VÔ HẠN tới khi đủ (hoặc Hủy).
-  const STRICT_FILL = 3, STRICT_DIFF = 3;
+  // VÉT CẠN CHÍNH XÁC: chỉ nhận map khít ±3 (độ khó), sinh VÔ HẠN tới khi đủ (hoặc Hủy).
+  const STRICT_DIFF = 3;
   // Hạn ngạch theo từng điểm độ khó trên curve: mỗi slot 1 ô cần lấp -> phân bố đúng đường cong.
   function buildQuota(targets) { const q = new Map(); for (const t of targets) q.set(t, (q.get(t) || 0) + 1); return q; }
-  // Tìm slot CHƯA đầy gần điểm độ khó của level nhất; trả target nếu trong ±3 (kèm fill ±3), else null.
-  function matchSlot(lvl, quota, params) {
-    if (params.fill > 0 && lvl.fillDelta > STRICT_FILL) return null;
+  // Tìm slot CHƯA đầy gần điểm độ khó của level nhất; trả target nếu trong ±3, else null.
+  function matchSlot(lvl, quota) {
     let bestT = null, bestD = Infinity;
     for (const [t, rem] of quota) if (rem > 0) { const dd = Math.abs(t - lvl.score); if (dd < bestD) { bestD = dd; bestT = t; } }
     return (bestT !== null && bestD <= STRICT_DIFF) ? bestT : null;
@@ -420,7 +407,7 @@ self.onmessage = function (e) {
   function runParallelStream(W, H, maskArr, targets, params, dedup, seen, count, onAccept) {
     return new Promise((resolve) => {
       let url; try { url = buildWorkerURL(); } catch (e) { resolve("fallback"); return; }
-      const N = workerCount(count), workers = [];
+      const N = workerCount(), workers = [];
       const quota = buildQuota(targets);
       let dead = false, made = 0, tried = 0, lastPaint = 0;
       B.activeWorkers = workers;
@@ -436,7 +423,7 @@ self.onmessage = function (e) {
           if (data.hb) { tried += data.hb; hint(); return; }
           const lvl = data;
           if (dedup) { const sig = levelSignature(lvl.pieces); if (seen.has(sig)) { return; } seen.add(sig); }
-          const slot = matchSlot(lvl, quota, params);
+          const slot = matchSlot(lvl, quota);
           if (slot !== null) {
             quota.set(slot, quota.get(slot) - 1); lvl.target = slot; lvl.diffDelta = Math.abs(lvl.score - slot);
             made = onAccept(lvl);
@@ -461,7 +448,7 @@ self.onmessage = function (e) {
       if (lvl) {
         let dup = false;
         if (dedup) { const sig = levelSignature(lvl.pieces); if (seen.has(sig)) dup = true; else seen.add(sig); }
-        if (!dup) { const slot = matchSlot(lvl, quota, params); if (slot !== null) { quota.set(slot, quota.get(slot) - 1); lvl.target = slot; lvl.diffDelta = Math.abs(lvl.score - slot); made = onAccept(lvl); accepted = true; } }
+        if (!dup) { const slot = matchSlot(lvl, quota); if (slot !== null) { quota.set(slot, quota.get(slot) - 1); lvl.target = slot; lvl.diffDelta = Math.abs(lvl.score - slot); made = onAccept(lvl); accepted = true; } }
       }
       if (!accepted) { tried++; if (tried - lastPaint >= 100) { lastPaint = tried; $b("bProgInfo").textContent = `Vét cạn ±3… ${made}/${count} đạt · đã thử ${tried}`; } }
       if (iters % 5 === 0 || made >= count) await new Promise(r => requestAnimationFrame(r));
@@ -485,7 +472,7 @@ self.onmessage = function (e) {
     if (B.layoutType === "paint" && (!mask || !mask.size)) { $b("bProgInfo").textContent = "⚠ Chưa vẽ ô nào."; return; }
     const count = clamp(+$b("bCount").value, 1, 1000);
     const targets = sampleCurve(B.curve, count);
-    const params = { diff: 50, longPref: 55, mother: $b("bMother").checked, fill: clamp(+$b("bFill").value, 0, 100) / 100 };   // độ-phụ-thuộc & ưu-tiên-dài dùng mặc định cố định
+    const params = { diff: 50, mother: $b("bMother").checked };   // luôn lấp đầy + độ-khó-hint mặc định; chỉ lọc theo độ khó
     const dedup = true, W = B.W, H = B.H, startId = nextLibId();   // luôn bỏ trùng
     const wantParallel = typeof Worker !== "undefined" && count >= 8;   // luôn xử lý song song (tự fallback 1 luồng nếu bị chặn)
 
@@ -506,7 +493,7 @@ self.onmessage = function (e) {
     };
     try {
       if (wantParallel) {
-        const N = workerCount(count); mode = N + " luồng";
+        const N = workerCount(); mode = N + " luồng";
         const r = await runParallelStream(W, H, mask ? Array.from(mask) : null, targets, params, dedup, seen, count, onAccept);
         if (r === "cancel") cancelled = true;
         else if (r === "fallback") {   // worker bị chặn/lỗi -> 1 luồng
@@ -907,12 +894,6 @@ self.onmessage = function (e) {
   $b("bPaintClear").addEventListener("click", () => { B.paint = new Set(); renderPreview(); });
   $b("bPaintInvert").addEventListener("click", () => { const n = new Set(); for (let y = 0; y < B.H; y++) for (let x = 0; x < B.W; x++) { const k = x + "," + y; if (!B.paint.has(k)) n.add(k); } B.paint = n; renderPreview(); });
 
-  function syncFillLabel() {
-    const v = +$b("bFill").value;
-    $b("bFillVal").textContent = v;
-    $b("bFillAuto").textContent = v === 0 ? " (tự động)" : "% cố định";
-  }
-  $b("bFill").addEventListener("input", syncFillLabel);
   $b("bCount").addEventListener("input", updateCurveInfo);
   $b("bGenerate").addEventListener("click", runBatch);
   $b("bCancel").addEventListener("click", () => { B.cancel = true; if (B.cancelParallel) B.cancelParallel(); });
@@ -982,7 +963,6 @@ self.onmessage = function (e) {
   loadCurve(); loadLibrary();
   B.scale = clamp(+$b("bScale").value, 40, 100) / 100;
   $b("bScaleVal").textContent = $b("bScale").value;
-  syncFillLabel();
   setLayoutType("rect");
   updateCurveInfo();
 })();
