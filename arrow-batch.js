@@ -382,33 +382,41 @@ self.onmessage = function (e) {
     $b("bGenerate").disabled = true; $b("bCancel").style.display = "inline-block";
     $b("bProgWrap").style.display = "block"; $b("bProgBar").style.width = "0%";
 
-    let made = 0, skipped = 0, cancelled = false, mode = "1 luồng";
-    if (wantParallel) {
-      const N = workerCount(count);
-      try {
-        const levels = await runParallel(W, H, mask ? Array.from(mask) : null, targets, params,
-          d => setProg(d, count, "…", `(song song · ${N} luồng)`));
-        const res = ingestLevels(levels, targets, startId, dedup);
-        made = res.made; skipped = res.skipped; mode = N + " luồng";
-      } catch (err) {
-        if (err === "cancel") { cancelled = true; }
-        else {
-          $b("bProgInfo").textContent = "⚠ Worker bị chặn — chuyển sang 1 luồng…";
-          const res = await runSequential(W, H, mask, targets, params, dedup, startId);
-          made = res.made; skipped = res.skipped; cancelled = B.cancel;
+    let made = 0, skipped = 0, cancelled = false, mode = "1 luồng", errMsg = "";
+    try {
+      if (wantParallel) {
+        const N = workerCount(count);
+        try {
+          const levels = await runParallel(W, H, mask ? Array.from(mask) : null, targets, params,
+            d => setProg(d, count, "…", `(song song · ${N} luồng)`));
+          const res = ingestLevels(levels, targets, startId, dedup);
+          made = res.made; skipped = res.skipped; mode = N + " luồng";
+        } catch (err) {
+          if (err === "cancel") { cancelled = true; }
+          else {   // worker lỗi/bị chặn -> tự chuyển 1 luồng
+            console.warn("[Sinh hàng loạt] worker lỗi, chuyển 1 luồng:", err);
+            $b("bProgInfo").textContent = "⚠ Worker lỗi — chuyển sang 1 luồng…";
+            const res = await runSequential(W, H, mask, targets, params, dedup, startId);
+            made = res.made; skipped = res.skipped; cancelled = B.cancel;
+          }
         }
+      } else {
+        const res = await runSequential(W, H, mask, targets, params, dedup, startId);
+        made = res.made; skipped = res.skipped; cancelled = B.cancel;
       }
-    } else {
-      const res = await runSequential(W, H, mask, targets, params, dedup, startId);
-      made = res.made; skipped = res.skipped; cancelled = B.cancel;
+    } catch (err) {
+      errMsg = (err && err.message) ? err.message : String(err);
+      console.error("[Sinh hàng loạt] LỖI:", err);
+    } finally {
+      B.generating = false; B.cancelParallel = null;
+      $b("bGenerate").disabled = false; $b("bCancel").style.display = "none";
+      $b("bProgInfo").textContent = errMsg
+        ? "✗ Lỗi khi sinh: " + errMsg + " — mở Console (F12) xem chi tiết."
+        : (cancelled ? "⛔ Đã hủy · " : `✓ Xong (${mode}) · `)
+          + `${made} level mới (tổng ${B.library.length})` + (skipped ? ` · bỏ ${skipped} trùng` : "");
+      setTimeout(() => { $b("bProgWrap").style.display = "none"; }, 1600);
+      try { saveLibrary(); renderLibrary(); } catch (e2) { console.error("[Thư viện] lỗi render:", e2); }
     }
-
-    B.generating = false;
-    $b("bGenerate").disabled = false; $b("bCancel").style.display = "none";
-    $b("bProgInfo").textContent = (cancelled ? "⛔ Đã hủy · " : `✓ Xong (${mode}) · `)
-      + `${made} level mới (tổng ${B.library.length})` + (skipped ? ` · bỏ ${skipped} trùng` : "");
-    setTimeout(() => { $b("bProgWrap").style.display = "none"; }, 1600);
-    saveLibrary(); renderLibrary();
   }
 
   // ---------- Thumbnail ----------
@@ -416,19 +424,21 @@ self.onmessage = function (e) {
     const ctx = cv.getContext("2d"), W = lvl.w, H = lvl.h, S = cv.width;
     const cell = S / Math.max(W, H), ox = (S - cell * W) / 2, oy = (S - cell * H) / 2;
     ctx.clearRect(0, 0, S, S);
-    ctx.fillStyle = "rgba(255,255,255,0.035)";
-    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) ctx.fillRect(ox + x * cell + 0.5, oy + y * cell + 0.5, cell - 1, cell - 1);
+    // lưới mờ (giao điểm = tâm ô); rắn vẽ TRÊN đường lưới
+    ctx.strokeStyle = "rgba(255,255,255,0.08)"; ctx.lineWidth = Math.max(0.5, cell * 0.04);
+    for (let x = 0; x < W; x++) { ctx.beginPath(); ctx.moveTo(ox + (x + 0.5) * cell, oy + 0.5 * cell); ctx.lineTo(ox + (x + 0.5) * cell, oy + (H - 0.5) * cell); ctx.stroke(); }
+    for (let y = 0; y < H; y++) { ctx.beginPath(); ctx.moveTo(ox + 0.5 * cell, oy + (y + 0.5) * cell); ctx.lineTo(ox + (W - 0.5) * cell, oy + (y + 0.5) * cell); ctx.stroke(); }
     lvl.pieces.forEach((p, i) => {
       const color = p.mother ? "#e8c25a" : pieceColor(i);
       ctx.strokeStyle = color; ctx.fillStyle = color;
       ctx.lineWidth = Math.max(1, cell * 0.34); ctx.lineCap = "round"; ctx.lineJoin = "round";
       const pts = p.cells.map(c => ({ x: ox + (c[0] + 0.5) * cell, y: oy + (c[1] + 0.5) * cell }));
+      const d = DELTA[p.dir], h = pts[0], t = cell * 0.5, b = cell * 0.3, px = -d.y, py = d.x;
       if (pts.length > 1) {
         ctx.beginPath(); ctx.moveTo(pts[pts.length - 1].x, pts[pts.length - 1].y);
         for (let k = pts.length - 2; k >= 0; k--) ctx.lineTo(pts[k].x, pts[k].y);
         ctx.stroke();
       }
-      const d = DELTA[p.dir], h = pts[0], t = cell * 0.5, b = cell * 0.3, px = -d.y, py = d.x;
       ctx.beginPath();
       ctx.moveTo(h.x + d.x * t, h.y + d.y * t);
       ctx.lineTo(h.x + px * b, h.y + py * b);
@@ -602,16 +612,26 @@ self.onmessage = function (e) {
     img.onerror = () => { URL.revokeObjectURL(url); $b("bLayoutInfo").textContent = "⚠ Không đọc được ảnh."; };
     img.src = url;
   }
-  // Tải ảnh từ URL (kéo từ web). Thử có CORS trước (để đọc được pixel), lỗi thì thử lại không CORS.
+  // Tải ảnh từ URL (kéo từ web). Chuỗi thử: (1) trực tiếp có CORS → (2) qua proxy ảnh
+  // weserv (thêm CORS, đọc được pixel) → (3) trực tiếp không CORS (hiển thị được, có thể taint).
+  function weservURL(url) {
+    const noScheme = url.replace(/^(https?):\/\//i, (m, p) => p.toLowerCase() === "https" ? "ssl:" : "");
+    return "https://images.weserv.nl/?url=" + encodeURIComponent(noScheme);
+  }
   function loadImageURL(url, onOK) {
-    const attempt = cors => {
+    const tryLoad = (src, cors, next) => {
       const img = new Image();
       if (cors) img.crossOrigin = "anonymous";
       img.onload = () => onOK(img, true);
-      img.onerror = () => { if (cors) attempt(false); else $b("bLayoutInfo").textContent = "⚠ Không tải được ảnh từ link (bị chặn). Hãy lưu ảnh về máy rồi bấm 'Chọn ảnh'."; };
-      img.src = url;
+      img.onerror = next;
+      img.src = src;
     };
-    attempt(true);
+    const isData = /^data:image\//i.test(url);
+    tryLoad(url, true, () => {
+      if (isData) { $b("bLayoutInfo").textContent = "⚠ Không đọc được ảnh."; return; }
+      tryLoad(weservURL(url), true, () =>
+        tryLoad(url, false, () => { $b("bLayoutInfo").textContent = "⚠ Không tải được ảnh từ link. Hãy lưu ảnh về máy rồi 'Chọn ảnh'."; }));
+    });
   }
   // Lấy ảnh từ dữ liệu kéo-thả: ưu tiên file, rồi tới URL (uri-list / <img src> / text).
   function imageFromDataTransfer(dt, onImage) {
@@ -635,15 +655,6 @@ self.onmessage = function (e) {
       ? "⚠ Ảnh web này chặn đọc pixel (CORS). Hãy lưu ảnh về máy rồi bấm 'Chọn ảnh'."
       : `Ảnh ${img.naturalWidth}×${img.naturalHeight} đã nạp${fromWeb ? " (kéo từ web)" : ""}.`;
   }
-  function makeDropZone(el, onImage, onMiss) {
-    el.addEventListener("dragover", e => { e.preventDefault(); e.dataTransfer.dropEffect = "copy"; el.classList.add("dropping"); });
-    el.addEventListener("dragleave", e => { if (e.target === el) el.classList.remove("dropping"); });
-    el.addEventListener("drop", e => {
-      e.preventDefault(); el.classList.remove("dropping");
-      if (!imageFromDataTransfer(e.dataTransfer, onImage) && onMiss) onMiss();
-    });
-  }
-
   // ---------- Wiring ----------
   function setLayoutType(t) {
     B.layoutType = t;
@@ -667,9 +678,6 @@ self.onmessage = function (e) {
     loadImageBlob(f, setBatchImage);
   });
   $b("bImgClear").addEventListener("click", () => { B.maskImg = null; B.maskTainted = false; renderPreview(); });
-  // Kéo-thả ảnh (từ máy hoặc từ web) vào khung xem trước / vùng ảnh.
-  makeDropZone(document.querySelector(".layout-preview-wrap"), setBatchImage, () => { $b("bLayoutInfo").textContent = "⚠ Không thấy ảnh trong nội dung kéo vào."; });
-  makeDropZone($b("bImageRow"), setBatchImage, () => { $b("bLayoutInfo").textContent = "⚠ Không thấy ảnh trong nội dung kéo vào."; });
   $b("bScale").addEventListener("input", () => { B.scale = clamp(+$b("bScale").value, 40, 100) / 100; $b("bScaleVal").textContent = $b("bScale").value; renderPreview(); updateCurveInfo(); });
   $b("bMother").addEventListener("change", () => {
     if ($b("bMother").checked && B.scale > 0.97) { $b("bScale").value = 90; B.scale = 0.9; $b("bScaleVal").textContent = "90"; }
@@ -716,14 +724,26 @@ self.onmessage = function (e) {
     syncModeUI(); renderPreview(); updateCurveInfo(); renderLibrary();
   });
 
-  // Kéo-thả ảnh vào board khi đang ở Editor (Ảnh → Map). Dùng lại hàm global của arrow-out.js.
-  (function wireEditorDrop() {
-    const board = document.getElementById("board"); if (!board) return;
-    board.addEventListener("dragover", e => { if (state.mode !== "edit") return; e.preventDefault(); e.dataTransfer.dropEffect = "copy"; board.classList.add("dropping"); });
-    board.addEventListener("dragleave", () => board.classList.remove("dropping"));
-    board.addEventListener("drop", e => {
-      if (state.mode !== "edit") return;
-      e.preventDefault(); board.classList.remove("dropping");
+  // ---------- Kéo-thả ảnh TOÀN CỤC (batch + editor) ----------
+  // Thả ảnh ở BẤT KỲ đâu khi đang ở chế độ Hàng loạt hoặc Editor — có lớp phủ chỉ dẫn.
+  const dropOverlay = document.createElement("div");
+  dropOverlay.id = "dropOverlay";
+  dropOverlay.textContent = "🖼️ Thả ảnh vào đây để nạp";
+  document.body.appendChild(dropOverlay);
+  const dndHasImage = e => e.dataTransfer && [...e.dataTransfer.types].some(t => t === "Files" || t === "text/uri-list" || t === "text/html");
+  const dndMode = () => state.mode === "batch" || state.mode === "edit";
+  let dragDepth = 0;
+  const hideOverlay = () => { dragDepth = 0; dropOverlay.classList.remove("show"); };
+  window.addEventListener("dragenter", e => { if (!dndHasImage(e) || !dndMode()) return; dragDepth++; dropOverlay.classList.add("show"); });
+  window.addEventListener("dragleave", e => { if (!dndHasImage(e)) return; if (--dragDepth <= 0) hideOverlay(); });
+  window.addEventListener("dragover", e => { if (dndHasImage(e) && dndMode()) { e.preventDefault(); e.dataTransfer.dropEffect = "copy"; } });
+  window.addEventListener("dragend", hideOverlay);
+  window.addEventListener("drop", e => {
+    if (!dndHasImage(e)) return;
+    e.preventDefault(); hideOverlay();
+    if (state.mode === "batch") {
+      if (!imageFromDataTransfer(e.dataTransfer, setBatchImage)) $b("bLayoutInfo").textContent = "⚠ Không thấy ảnh trong nội dung kéo vào.";
+    } else if (state.mode === "edit") {
       const ok = imageFromDataTransfer(e.dataTransfer, (img, fromWeb) => {
         let tainted = false;
         if (fromWeb) { try { const c = document.createElement("canvas"); c.width = c.height = 1; const x = c.getContext("2d"); x.drawImage(img, 0, 0, 1, 1); x.getImageData(0, 0, 1, 1); } catch (e2) { tainted = true; } }
@@ -732,11 +752,8 @@ self.onmessage = function (e) {
         setMaskInfo(`Ảnh ${img.naturalWidth}×${img.naturalHeight} đã nạp (kéo vào). Chỉnh Ngưỡng/Độ gắt rồi 'Tạo map từ ảnh'.`);
       });
       if (!ok) setMaskInfo("⚠ Không thấy ảnh trong nội dung kéo.", "warn");
-    });
-  })();
-  // Chặn trình duyệt điều hướng/mở ảnh khi lỡ thả ra ngoài vùng nhận.
-  window.addEventListener("dragover", e => { if (e.dataTransfer && [...e.dataTransfer.types].some(t => t === "Files" || t === "text/uri-list")) e.preventDefault(); });
-  window.addEventListener("drop", e => { if (e.dataTransfer && [...e.dataTransfer.types].some(t => t === "Files" || t === "text/uri-list")) e.preventDefault(); });
+    }
+  });
 
   // ---------- Boot ----------
   loadCurve(); loadLibrary();

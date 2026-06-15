@@ -238,8 +238,8 @@
             <input type="range" id="bDiff" min="0" max="100" value="50" /></label>
         </div>
         <div class="row">
-          <label class="fld" title="0 = rắn ngắn (lấp khít) … 100 = rắn dài">Ưu tiên rắn dài: <b id="bLongVal">40</b>
-            <input type="range" id="bLong" min="0" max="100" value="40" /></label>
+          <label class="fld" title="0 = rắn ngắn (lấp khít) … 100 = rắn dài. Cao = ít rắn vụn, độ khó đến từ cấu trúc.">Ưu tiên rắn dài: <b id="bLongVal">55</b>
+            <input type="range" id="bLong" min="0" max="100" value="55" /></label>
         </div>
         <div class="row">
           <label class="fld" title="Tỉ lệ ô vùng chơi bị rắn phủ. 0 = tự động (quét mật độ để khớp difficulty curve); >0 = cố định mật độ (độ khó là kết quả thực tế, curve chỉ tham khảo).">Độ lấp đầy: <b id="bFillVal">0</b><span id="bFillAuto" style="color:var(--muted)"> (tự động)</span>
@@ -266,7 +266,7 @@
       <div class="card">
         <h2>Xem trước layout</h2>
         <div class="layout-preview-wrap"><canvas id="bPreview" class="layout-preview"></canvas></div>
-        <div class="hint" style="margin-top:8px">💡 Có thể <b>kéo ảnh từ máy hoặc kéo thẳng từ web</b> (tab khác) thả vào khung trên — tự chuyển sang layout "Từ ảnh".</div>
+        <div class="hint" style="margin-top:8px">💡 <b>Kéo ảnh thả vào bất kỳ đâu</b> trong chế độ Hàng loạt (từ máy hoặc từ web) — tự chuyển sang layout "Từ ảnh". Ảnh web sẽ được nạp qua proxy để đọc được pixel.</div>
       </div>
 
       <div class="card" id="bLibCard">

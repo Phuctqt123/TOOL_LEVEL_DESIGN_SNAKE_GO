@@ -197,7 +197,8 @@ function depMetrics(pieces, w, h) {
 // ---------- Đo độ khó (port từ tool difficulty-gen) ----------
 // Mô hình: solver "natural-turn" (mỗi lượt MỌI rắn thoát được thì thoát đồng thời),
 // kết hợp "bẫy thị giác" (perceptual) — nhìn tưởng đi được nhưng bị chặn lệch góc nhỏ.
-// Điểm = 0.10·turns + 0.20·snakes + 0.10·rate + 0.60·perceptualĐộng. Tier 5 mức.
+// Điểm = 0.16·turns + 0.08·snakes + 0.16·rate + 0.60·perceptualĐộng. Tier 5 mức.
+// (số lượng rắn cố ý NHẸ CÂN: độ khó đến từ chuỗi phụ thuộc/tốc độ giải/bẫy thị giác, không phải nhồi rắn)
 function movableList(rest, w, h) {
   const occ = new Map();
   for (const p of rest) for (const c of p.cells) occ.set(c.x + "," + c.y, p.id);
@@ -285,7 +286,7 @@ function computeDifficulty(pieces, w, h) {
   const turnsScore = Math.max(0, Math.min(100, Math.log2(Math.max(1, a.turns)) / Math.log2(50) * 100));
   const snakeScore = Math.max(0, Math.min(100, Math.log2(Math.max(1, a.snakes)) / Math.log2(140) * 100));
   const percScore  = percDynamic(pieces, w, h);
-  const score = Math.round(0.10 * turnsScore + 0.20 * snakeScore + 0.10 * rateScore + 0.60 * percScore);
+  const score = Math.round(0.16 * turnsScore + 0.08 * snakeScore + 0.16 * rateScore + 0.60 * percScore);
   const [, tier, emoji] = DIFF_TIERS.find(t => score < t[0]);
   return { score, tier, emoji, breakdown: { turnsScore, snakeScore, rateScore, percScore } };
 }
@@ -308,7 +309,7 @@ function growSnake(hx, hy, dir, len, pieces, w, h, id, allow) {
   // Ràng buộc: nếu định dài >=2, ô cổ phải nằm NGAY SAU đầu (ngược hướng dir) -> đầu thẳng.
   if (len >= 2) {
     const nx = hx - d.x, ny = hy - d.y, kk = nx + "," + ny;
-    if (!inBoard(nx, ny, w, h) || occ.has(kk) || !allow(kk)) return { id, dir, cells };
+    if (!inBoard(nx, ny, w, h) || occ.has(kk) || !allow(kk)) return null;   // không đặt được cổ -> bỏ (không tạo rắn 1 ô)
     cells.push({ x:nx, y:ny }); used.add(kk); cur = { x:nx, y:ny };
   }
   // các ô còn lại đi bộ ngẫu nhiên (tránh ô đã chiếm, thân, tia đi của đầu; tôn trọng allow)
@@ -323,6 +324,7 @@ function growSnake(hx, hy, dir, len, pieces, w, h, id, allow) {
     if (!nxt) break;
     cells.push(nxt); used.add(nxt.x + "," + nxt.y); cur = nxt;
   }
+  if (cells.length < 2) return null;   // không bao giờ trả rắn 1 ô
   return { id, dir, cells };
 }
 
@@ -330,14 +332,14 @@ function growSnake(hx, hy, dir, len, pieces, w, h, id, allow) {
 function snakeLen(longPref, maxL) {
   const k = Math.pow(0.15, (longPref - 0.5) * 2);   // longPref 0 -> k lớn (ngắn); 1 -> k nhỏ (dài)
   let len = 1 + Math.floor(Math.pow(Math.random(), k) * maxL);
-  return len > maxL ? maxL : len;
+  return Math.min(maxL, Math.max(2, len));   // tối thiểu 2 ô = 1 cạnh (không sinh rắn 1 ô)
 }
 
 // Sinh rắn LẤP ĐẦY vùng chơi tới tỉ lệ `fill`. longPref/difficulty/wrapping: 0..100.
 // opts: { mask, overflow, fill, bounds:{x0,y0,x1,y1} }
 function generateMap(w, h, longPref, difficulty, wrapping, opts) {
   const t = clamp(difficulty, 0, 100) / 100, wp = clamp(wrapping, 0, 100) / 100, lp = clamp(longPref, 0, 100) / 100;
-  const wEdges = t * 2.4, wCross = t * 2.0, wDepth = t * 4.0, wWrap = wp * 8.0, wLen = 0.3;
+  const wEdges = t * 2.4, wCross = t * 2.0, wDepth = t * 4.0, wWrap = wp * 8.0, wLen = 0.3 + lp * 1.5;   // ưu tiên rắn DÀI mạnh hơn -> ít rắn vụn
   const mask = (opts && opts.mask) || null, overflow = (opts && opts.overflow) || 0;
   const fill = (opts && opts.fill != null) ? opts.fill : 0.65;
   const bounds = (opts && opts.bounds) || null;
@@ -583,6 +585,47 @@ function renderStatic() {
   }
 }
 
+// ---------- Render: lưới (đường kẻ + giao điểm) — rắn nằm TRÊN đường lưới ----------
+function gLine(svg, x1, y1, x2, y2) {
+  const l = svgEl("line");
+  l.setAttribute("x1", x1); l.setAttribute("y1", y1); l.setAttribute("x2", x2); l.setAttribute("y2", y2);
+  l.setAttribute("class", "grid-line");
+  svg.appendChild(l);
+}
+function renderGrid() {
+  const old = board.querySelector("#gridLayer"); if (old) old.remove();
+  const { w, h } = dims();
+  const svg = svgEl("svg");
+  svg.id = "gridLayer";
+  svg.setAttribute("width", parseFloat(board.style.width));
+  svg.setAttribute("height", parseFloat(board.style.height));
+  const mask = (state.mode === "edit") ? state.maskCells : null;
+  // vùng mask (silhouette ảnh) — ô mờ để vẫn thấy hình
+  if (mask) for (const k of mask) {
+    const i = k.indexOf(","), x = +k.slice(0, i), y = +k.slice(i + 1);
+    if (x >= w || y >= h) continue;
+    const c = cellCenter(x, y), s = CELL + GAP;
+    const r = svgEl("rect");
+    r.setAttribute("x", c.x - s / 2); r.setAttribute("y", c.y - s / 2);
+    r.setAttribute("width", s); r.setAttribute("height", s);
+    r.setAttribute("rx", 4); r.setAttribute("class", "grid-mask");
+    svg.appendChild(r);
+  }
+  // đường kẻ ngang/dọc nối các giao điểm
+  for (let y = 0; y < h; y++) { const a = cellCenter(0, y), b = cellCenter(w - 1, y); gLine(svg, a.x, a.y, b.x, b.y); }
+  for (let x = 0; x < w; x++) { const a = cellCenter(x, 0), b = cellCenter(x, h - 1); gLine(svg, a.x, a.y, b.x, b.y); }
+  // giao điểm
+  const rad = Math.max(1.5, CELL * 0.07);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const c = cellCenter(x, y);
+    const dot = svgEl("circle");
+    dot.setAttribute("cx", c.x); dot.setAttribute("cy", c.y); dot.setAttribute("r", rad);
+    dot.setAttribute("class", "grid-dot");
+    svg.appendChild(dot);
+  }
+  board.appendChild(svg);
+}
+
 // ---------- Render: mũi tên (SVG line + arrowhead) ----------
 // Hình học một con rắn: nét nối tâm các ô (đuôi -> đầu) + tam giác đầu.
 function arrowTri(head, d) {
@@ -610,7 +653,7 @@ function pieceGeom(cells, dir) {
 
 function drawPiece(svg, piece, opts) {
   const color = (opts && opts.color) || (piece.mother ? "#e8c25a" : pieceColor(piece.id));
-  const sw = Math.max(1.8, CELL * (piece.mother ? 0.12 : 0.07));   // rắn mẹ dày hơn (viền)
+  const sw = Math.max(2, CELL * (piece.mother ? 0.15 : 0.10));   // rắn mẹ dày hơn (viền)
   const geom = pieceGeom(piece.cells, piece.dir);
   const g = svgEl("g");
   const line = svgEl("polyline");
@@ -669,7 +712,7 @@ function renderDeps() {
   board.appendChild(svg);
 }
 
-function render() { renderStatic(); buildPieces(); renderDeps(); updateStatus(); }
+function render() { renderStatic(); renderGrid(); buildPieces(); renderDeps(); updateStatus(); }
 
 function updateStatus() {
   $("levelLabel").textContent = state.mode === "edit" ? "Editor" : (state.levelIndex === -1 ? "Test" : state.levelIndex + 1);
