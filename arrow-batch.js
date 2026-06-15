@@ -486,8 +486,8 @@ self.onmessage = function (e) {
     const count = clamp(+$b("bCount").value, 1, 1000);
     const targets = sampleCurve(B.curve, count);
     const params = { diff: 50, longPref: 55, mother: $b("bMother").checked, fill: clamp(+$b("bFill").value, 0, 100) / 100 };   // độ-phụ-thuộc & ưu-tiên-dài dùng mặc định cố định
-    const dedup = $b("bDedup").checked, W = B.W, H = B.H, startId = nextLibId();
-    const wantParallel = $b("bParallel").checked && typeof Worker !== "undefined" && count >= 8;
+    const dedup = true, W = B.W, H = B.H, startId = nextLibId();   // luôn bỏ trùng
+    const wantParallel = typeof Worker !== "undefined" && count >= 8;   // luôn xử lý song song (tự fallback 1 luồng nếu bị chặn)
 
     B.generating = true; B.cancel = false;
     $b("bGenerate").disabled = true; $b("bCancel").style.display = "inline-block";
@@ -982,8 +982,6 @@ self.onmessage = function (e) {
   loadCurve(); loadLibrary();
   B.scale = clamp(+$b("bScale").value, 40, 100) / 100;
   $b("bScaleVal").textContent = $b("bScale").value;
-  const cores = navigator.hardwareConcurrency;
-  $b("bCores").textContent = cores ? `(~${Math.min(cores, 8)} luồng)` : "";
   syncFillLabel();
   setLayoutType("rect");
   updateCurveInfo();
