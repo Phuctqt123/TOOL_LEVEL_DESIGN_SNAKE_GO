@@ -404,35 +404,44 @@ self.onmessage = function (e) {
     const cores = navigator.hardwareConcurrency || 4;
     return Math.max(1, Math.min(cores, 8, Math.ceil(count / 4)));
   }
-  // Bậc chấp nhận [fillTol%, diffTol điểm] — ƯU TIÊN ĐỘ KHÓ ĐÚNG: nới fill rộng dần (fill=100% thường
-  // không thể đạt vì rắn ≥2 ô luôn để khe), chỉ nới độ khó ở 2 bậc cuối khi thật sự bí. Bậc cuối nhận mọi map.
-  const TIERS = [[3, 3], [5, 3], [7, 3], [12, 3], [100, 3], [100, 7], [100, 100]];
-  const ESCALATE = 120;   // số "trượt" liên tiếp ở 1 bậc -> nới lên bậc kế (KHÔNG giới hạn thời gian)
-  const GIVEUP = 4000;    // ở bậc rộng nhất mà vẫn trượt tới mức này -> coi như board không sinh nổi (chống treo)
-  // Sinh SONG SONG kiểu STREAM: worker stream level (kèm deltas); main nhận theo bậc, nới bậc khi kẹt.
-  // resolve: 'done' | 'cancel' | 'exhausted' | 'fallback'.
+  // VÉT CẠN CHÍNH XÁC: chỉ nhận map khít ±3 (cả fill lẫn độ khó), sinh VÔ HẠN tới khi đủ (hoặc Hủy).
+  const STRICT_FILL = 3, STRICT_DIFF = 3;
+  // Hạn ngạch theo từng điểm độ khó trên curve: mỗi slot 1 ô cần lấp -> phân bố đúng đường cong.
+  function buildQuota(targets) { const q = new Map(); for (const t of targets) q.set(t, (q.get(t) || 0) + 1); return q; }
+  // Tìm slot CHƯA đầy gần điểm độ khó của level nhất; trả target nếu trong ±3 (kèm fill ±3), else null.
+  function matchSlot(lvl, quota, params) {
+    if (params.fill > 0 && lvl.fillDelta > STRICT_FILL) return null;
+    let bestT = null, bestD = Infinity;
+    for (const [t, rem] of quota) if (rem > 0) { const dd = Math.abs(t - lvl.score); if (dd < bestD) { bestD = dd; bestT = t; } }
+    return (bestT !== null && bestD <= STRICT_DIFF) ? bestT : null;
+  }
+  // Sinh SONG SONG kiểu STREAM: worker stream level; main gắn vào slot curve còn trống nếu khít ±3.
+  // resolve: 'done' | 'cancel' | 'fallback'  (KHÔNG có 'exhausted' — grind tới khi đủ).
   function runParallelStream(W, H, maskArr, targets, params, dedup, seen, count, onAccept) {
     return new Promise((resolve) => {
       let url; try { url = buildWorkerURL(); } catch (e) { resolve("fallback"); return; }
       const N = workerCount(count), workers = [];
-      let dead = false, made = 0, tier = 0, stale = 0;
+      const quota = buildQuota(targets);
+      let dead = false, made = 0, tried = 0, lastPaint = 0;
       B.activeWorkers = workers;
       const finish = (r) => { if (dead) return; dead = true; workers.forEach(w => { try { w.terminate(); } catch (e) {} }); B.activeWorkers = null; B.cancelParallel = null; resolve(r); };
       B.cancelParallel = () => finish("cancel");
-      const onStale = (n) => { stale += n; if (stale >= ESCALATE) { if (tier < TIERS.length - 1) { tier++; stale = 0; } else if (stale >= GIVEUP) finish("exhausted"); } };
+      const hint = () => { if (tried - lastPaint >= 200) { lastPaint = tried; $b("bProgInfo").textContent = `Vét cạn ±3… ${made}/${count} đạt · đã thử ${tried} (đang tìm các mức khó còn thiếu)`; } };
       for (let i = 0; i < N; i++) {
         let w; try { w = new Worker(url); } catch (e) { finish("fallback"); return; }
         workers.push(w);
         w.onmessage = ev => {
           if (dead) return;
           const data = ev.data;
-          if (data.hb) { onStale(data.hb); return; }   // worker báo đã thử nhiều mà chưa ra
+          if (data.hb) { tried += data.hb; hint(); return; }
           const lvl = data;
-          if (dedup) { const sig = levelSignature(lvl.pieces); if (seen.has(sig)) return; seen.add(sig); }
-          if (lvl.fillDelta <= TIERS[tier][0] && lvl.diffDelta <= TIERS[tier][1]) {
-            made = onAccept(lvl, tier); stale = 0;
+          if (dedup) { const sig = levelSignature(lvl.pieces); if (seen.has(sig)) { return; } seen.add(sig); }
+          const slot = matchSlot(lvl, quota, params);
+          if (slot !== null) {
+            quota.set(slot, quota.get(slot) - 1); lvl.target = slot; lvl.diffDelta = Math.abs(lvl.score - slot);
+            made = onAccept(lvl);
             if (made >= count) finish("done");
-          } else onStale(1);   // level có nhưng chưa đạt bậc hiện tại
+          } else { tried++; hint(); }
         };
         w.onerror = () => finish("fallback");
         w.postMessage({ n: i, stride: N, W, H, maskArr, targets, params });
@@ -440,9 +449,10 @@ self.onmessage = function (e) {
       if (!workers.length) finish("done");
     });
   }
-  // Tuần tự (fallback / tắt song song) — cùng cơ chế bậc.
+  // Tuần tự (fallback / tắt song song) — cùng cơ chế hạn ngạch + grind vô hạn.
   async function runSequentialStream(W, H, mask, targets, params, dedup, seen, count, onAccept) {
-    let made = 0, idx = 0, tier = 0, stale = 0, iters = 0;
+    const quota = buildQuota(targets);
+    let made = 0, idx = 0, iters = 0, tried = 0, lastPaint = 0;
     while (made < count && !B.cancel) {
       iters++;
       const target = targets[idx % targets.length]; idx++;
@@ -451,10 +461,9 @@ self.onmessage = function (e) {
       if (lvl) {
         let dup = false;
         if (dedup) { const sig = levelSignature(lvl.pieces); if (seen.has(sig)) dup = true; else seen.add(sig); }
-        if (!dup && lvl.fillDelta <= TIERS[tier][0] && lvl.diffDelta <= TIERS[tier][1]) { lvl.target = target; made = onAccept(lvl, tier); accepted = true; }
+        if (!dup) { const slot = matchSlot(lvl, quota, params); if (slot !== null) { quota.set(slot, quota.get(slot) - 1); lvl.target = slot; lvl.diffDelta = Math.abs(lvl.score - slot); made = onAccept(lvl); accepted = true; } }
       }
-      if (accepted) stale = 0;
-      else { stale++; if (stale >= ESCALATE) { if (tier < TIERS.length - 1) { tier++; stale = 0; } else if (stale >= GIVEUP) break; } }
+      if (!accepted) { tried++; if (tried - lastPaint >= 100) { lastPaint = tried; $b("bProgInfo").textContent = `Vét cạn ±3… ${made}/${count} đạt · đã thử ${tried}`; } }
       if (iters % 5 === 0 || made >= count) await new Promise(r => requestAnimationFrame(r));
     }
   }
@@ -487,14 +496,12 @@ self.onmessage = function (e) {
 
     const seen = new Set();
     let made = 0, mode = "1 luồng", errMsg = "", cancelled = false;
-    const tierCounts = new Array(TIERS.length).fill(0);   // số level nhận ở mỗi bậc
-    // mỗi level ĐẠT -> thêm thư viện + HIỆN CARD NGAY + tăng tiến độ (chỉ tăng khi đạt). Trả `made` mới.
-    const onAccept = (lvl, tier) => {
-      lvl.id = startId + made; lvl.tierUsed = tier; B.library.push(lvl); B.selection.add(lvl.id); made++;
-      if (tier >= 0 && tier < tierCounts.length) tierCounts[tier]++;
+    // mỗi level KHÍT ±3 -> thêm thư viện + HIỆN CARD NGAY + tăng tiến độ. Trả `made` mới.
+    const onAccept = (lvl) => {
+      lvl.id = startId + made; B.library.push(lvl); B.selection.add(lvl.id); made++;
       appendLibCard(lvl);
       $b("bProgBar").style.width = Math.round(made / count * 100) + "%";
-      $b("bProgInfo").textContent = `Đang sinh… ${made}/${count} đạt`;
+      $b("bProgInfo").textContent = `Vét cạn ±3… ${made}/${count} đạt`;
       return made;
     };
     try {
@@ -515,15 +522,11 @@ self.onmessage = function (e) {
     } finally {
       B.generating = false; B.cancelParallel = null;
       $b("bGenerate").disabled = false; $b("bCancel").style.display = "none";
-      let exact = tierCounts[0] || 0, fillR = 0, diffR = 0;   // gộp: khít ±3 / chỉ nới fill / phải nới độ khó
-      for (let i = 1; i < tierCounts.length; i++) { if (TIERS[i][1] <= 3) fillR += tierCounts[i]; else diffR += tierCounts[i]; }
-      const tierTxt = (fillR + diffR === 0) ? " (tất cả khít ±3%)"
-        : ` · ±3%: ${exact}` + (fillR ? `, nới fill: ${fillR}` : "") + (diffR ? `, nới độ khó: ${diffR}` : "");
       $b("bProgInfo").textContent = errMsg
         ? "✗ Lỗi khi sinh: " + errMsg + " — mở Console (F12) xem chi tiết."
         : (cancelled ? "⛔ Đã hủy · " : `✓ Xong (${mode}) · `)
-          + `${made}/${count} level` + tierTxt
-          + (!cancelled && made < count ? ` · THIẾU ${count - made} (board không sinh nổi kể cả nới ±7 → hạ fill / nới curve)` : "");
+          + `${made}/${count} level khít ±3% (fill & độ khó)`
+          + (cancelled && made < count ? ` · còn thiếu ${count - made} (bấm Sinh để vét tiếp)` : "");
       setTimeout(() => { $b("bProgWrap").style.display = "none"; }, 1600);
       try { saveLibrary(); renderLibrary(); } catch (e2) { console.error("[Thư viện] lỗi render:", e2); }
     }
@@ -714,7 +717,7 @@ self.onmessage = function (e) {
   }
   // Nạp 1 mảng object level (mỗi object: format game / {w,h,pieces} / pack có .levels) vào thư viện. Trả số đã thêm.
   function ingestLevels(arr) {
-    let startId = nextLibId(), added = 0;
+    let startId = nextLibId(), added = 0, sawColor = false;
     for (const o of arr) {
       let w, h, pieces;
       if (isGameFormat(o)) {                                  // format game (lẻ hoặc trong pack)
@@ -726,6 +729,7 @@ self.onmessage = function (e) {
         pieces = o.pieces.map(p => ({ dir: p.dir, cells: p.cells.map(c => Array.isArray(c) ? [c[0], c[1]] : [c.x, c.y]), ...(p.mother ? { mother: true } : {}) }));
       }
       if (!w || !h || !pieces.length) continue;
+      if (pieces.some(p => typeof p.fixedColor === "number" && p.fixedColor >= 1)) sawColor = true;   // file có màu cố định
       const live = normPieces(pieces).map((p, i) => (p.id = i + 1, p));   // gán id để solve/analyzeSolve chạy đúng
       // tính LẠI mọi thông số từ chính các con rắn (y như lúc tự sinh) — bỏ qua metadata sẵn có
       const d = computeDifficulty(live, w, h);
@@ -741,6 +745,11 @@ self.onmessage = function (e) {
         target: o.target, pieces, id,
       });
       B.selection.add(id); added++;
+    }
+    // file có màu cố định -> bật "Màu Game" để thumbnail/chơi hiển thị đúng màu trong JSON (như editor)
+    if (sawColor && typeof colorMode !== "undefined" && colorMode !== "game") {
+      colorMode = "game";
+      if (typeof syncColorBtn === "function") syncColorBtn();
     }
     return added;
   }
