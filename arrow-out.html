@@ -81,19 +81,7 @@
       </div>
 
       <div class="row" style="margin-top:14px; border-top:1px solid var(--line); padding-top:12px">
-        <label class="fld" title="Độ rối / phụ thuộc khi đặt rắn. Thấp = thoáng, nhiều con thoát ngay; Cao = rắn chặn nhau nhiều, chuỗi phụ thuộc sâu (khó hơn).">Độ phụ thuộc: <b id="genDiffVal">50</b>
-          <input type="range" id="genDiff" min="0" max="100" value="50" /></label>
-      </div>
-      <div class="row">
-        <label class="fld" title="Cao = ưu tiên 'nút thắt': 1 con bị NHIỀU con khác cùng phụ thuộc (giải sai 1 bước là kẹt).">Nút thắt: <b id="genWrapVal">20</b>
-          <input type="range" id="genWrap" min="0" max="100" value="20" /></label>
-      </div>
-      <div class="row">
-        <label class="fld" title="0 = ưu tiên rắn NGẮN (lấp khít, hợp ảnh) … 100 = ưu tiên rắn DÀI">Ưu tiên rắn dài: <b id="genLongVal">40</b>
-          <input type="range" id="genLong" min="0" max="100" value="40" /></label>
-      </div>
-      <div class="row">
-        <label class="fld" title="Điểm độ khó muốn nhắm. 0 = tự chọn; >0 = sinh nhiều kiểu, giữ map gần điểm này nhất.">Điểm muốn: <b id="genTargetVal">0</b> <span style="color:var(--muted)">(0 = tự động)</span>
+        <label class="fld" title="Điểm độ khó muốn nhắm. 0 = tự chọn; >0 = sinh nhiều kiểu, giữ map gần điểm này nhất.">Điểm muốn (độ khó): <b id="genTargetVal">0</b> <span style="color:var(--muted)">(0 = tự động)</span>
           <input type="range" id="genTarget" min="0" max="100" value="0" /></label>
       </div>
       <div class="row" style="align-items:center">
@@ -233,25 +221,14 @@
           <label class="fld">Số level <input type="number" id="bCount" min="1" max="1000" value="300" /></label>
           <div class="hint" id="bCurveInfo" style="flex:2; align-self:flex-end"></div>
         </div>
-        <div class="row" style="margin-top:10px">
-          <button id="bMeasure" style="flex:1" title="Sinh thử vài map trên layout + tham số hiện tại để biết board này gen được khó từ bao nhiêu tới bao nhiêu → đặt curve cho đúng dải.">📊 Đo dải độ khó của board</button>
-        </div>
-        <div class="hint" id="bMeasureInfo" style="margin-top:4px"></div>
+        <div class="hint" id="bMeasureInfo" style="margin-top:8px"></div>
       </div>
 
       <div class="card">
         <h2>3 · Tham số sinh</h2>
         <div class="row">
-          <label class="fld" title="Độ rối / phụ thuộc khi đặt rắn. Thấp = thoáng; Cao = rắn chặn nhau nhiều, chuỗi phụ thuộc sâu (khó hơn).">Độ phụ thuộc: <b id="bDiffVal">50</b>
-            <input type="range" id="bDiff" min="0" max="100" value="50" /></label>
-        </div>
-        <div class="row">
-          <label class="fld" title="0 = rắn ngắn (lấp khít) … 100 = rắn dài. Cao = ít rắn vụn, độ khó đến từ cấu trúc.">Ưu tiên rắn dài: <b id="bLongVal">55</b>
-            <input type="range" id="bLong" min="0" max="100" value="55" /></label>
-        </div>
-        <div class="row">
-          <label class="fld" title="Tỉ lệ ô vùng chơi bị rắn phủ. 0 = tự động (quét mật độ để khớp difficulty curve); >0 = cố định mật độ (độ khó là kết quả thực tế, curve chỉ tham khảo).">Độ lấp đầy: <b id="bFillVal">0</b><span id="bFillAuto" style="color:var(--muted)"> (tự động)</span>
-            <input type="range" id="bFill" min="0" max="100" value="0" /></label>
+          <label class="fld" title="Tỉ lệ ô vùng chơi bị rắn phủ. 100 = lấp đầy; 0 = tự động (quét mật độ để khớp difficulty curve); >0 = cố định mật độ.">Độ lấp đầy: <b id="bFillVal">100</b><span id="bFillAuto" style="color:var(--muted)">% cố định</span>
+            <input type="range" id="bFill" min="0" max="100" value="100" /></label>
         </div>
         <div class="row" style="align-items:center">
           <label class="chk" title="Thêm 1 viền rắn mẹ ôm sát hình"><input type="checkbox" id="bMother" /> Rắn mẹ (viền ôm)</label>
@@ -301,18 +278,14 @@
           </div>
         </div>
         <div class="row" style="margin-top:8px">
-          <button id="bSelAll">Chọn hết</button>
-          <button id="bSelNone">Bỏ chọn</button>
-          <button id="bSelInvert">Đảo chọn</button>
+          <button id="bSelToggle">Chọn hết</button>
           <button id="bDelSel" class="danger">Xóa đã chọn</button>
-          <button id="bClearLib" class="danger">Xóa thư viện</button>
           <span class="hint" id="bSelInfo" style="align-self:center"></span>
         </div>
         <div class="row" style="margin-top:8px">
           <button id="bExportZip" class="primary">⬇ Export ZIP (đã chọn)</button>
-          <button id="bExportPack">⬇ Pack JSON</button>
-          <input type="file" id="bImportPack" accept=".json,application/json" hidden />
-          <button id="bImportBtn">⬆ Import pack</button>
+          <input type="file" id="bImportPack" accept=".json,.zip,application/json,application/zip" hidden />
+          <button id="bImportBtn">⬆ Import (JSON / ZIP)</button>
         </div>
         <div class="lib-grid" id="bLibGrid"></div>
       </div>

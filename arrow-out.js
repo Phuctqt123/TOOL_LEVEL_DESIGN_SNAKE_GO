@@ -990,9 +990,7 @@ function setMaskInfo(msg, kind) {
 // đọc các tham số chung của bộ sinh
 function genParams() {
   return {
-    diff: clamp(+$("genDiff").value, 0, 100),
-    wrap: clamp(+$("genWrap").value, 0, 100),
-    longPref: clamp(+$("genLong").value, 0, 100),
+    diff: 50, wrap: 20, longPref: 55,   // mặc định cố định (đã bỏ slider — tập trung vào "Điểm muốn")
     target: clamp(+$("genTarget").value, 0, 100),
     motherN: $("genMother").checked ? 1 : 0,
   };
@@ -1215,9 +1213,6 @@ $("mapFromImgBtn").addEventListener("click", doGenerateFromImage);
 $("imgTh").addEventListener("input", () => { $("imgThVal").textContent = $("imgTh").value; refreshMask(); render(); });
 $("imgHarsh").addEventListener("input", () => { $("imgHarshVal").textContent = $("imgHarsh").value; refreshMask(); render(); });
 $("imgFill").addEventListener("input", () => { $("imgFillVal").textContent = $("imgFill").value; });
-$("genDiff").addEventListener("input", () => { $("genDiffVal").textContent = $("genDiff").value; });
-$("genWrap").addEventListener("input", () => { $("genWrapVal").textContent = $("genWrap").value; });
-$("genLong").addEventListener("input", () => { $("genLongVal").textContent = $("genLong").value; });
 $("genTarget").addEventListener("input", () => { $("genTargetVal").textContent = +$("genTarget").value === 0 ? "0" : $("genTarget").value; });
 window.addEventListener("paste", e => {
   if (state.mode !== "edit") return;

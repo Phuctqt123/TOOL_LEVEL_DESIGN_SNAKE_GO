@@ -317,32 +317,52 @@
     cv.addEventListener("pointercancel", () => { painting = false; });
   })();
 
+  function coverFrac(pieces, mask, W, H) {   // % ô layout bị rắn phủ
+    const area = mask ? mask.size : W * H; let cov = 0;
+    for (const p of pieces) for (const c of p.cells) if (!mask || mask.has(c.x + "," + c.y)) cov++;
+    return area ? cov / area * 100 : 0;
+  }
   // ---------- Sinh 1 level theo target (pure — dùng cả ở main thread & worker) ----------
-  // params.fill > 0 -> cố định mật độ (gọi thẳng generateMap); = 0 -> tự động quét fill theo target.
+  // Trả về map TỐT NHẤT nằm trong BẬC RỘNG NHẤT (fill ±7% VÀ độ khó ±7), KÈM fillDelta/diffDelta.
+  // Ưu tiên độ khó đúng (key = diffDelta·10 + fillDelta). Vòng ngoài quyết định nhận theo bậc.
+  // Trả null nếu không sinh nổi map nào trong ±7/±7.
   function genLevelCore(W, H, mask, target, params) {
-    const arr = params.fill > 0
-      ? generateMap(W, H, params.longPref, params.diff, 0, { mask: mask || null, overflow: 0, fill: params.fill, bounds: null })
-      : autoGenerate(W, H, params.diff, 0, params.longPref, mask || null, 0, null, target, null);
-    if (!arr || arr.length < 1) return null;
-    if (!solve(arr, W, H).solvable) return null;
-    let mothers = [];
-    if (params.mother) {
-      mothers = buildMother(arr, W, H, 1, mask ? Array.from(mask) : null);
-      if (mothers.length && !solve(arr.concat(mothers), W, H).solvable) mothers = [];
+    const WIDE = 7, MAX = params.fill > 0 ? 12 : 4;
+    const lps = [55, 25, 85, 40, 70, 15, 95, 50, 30, 65];
+    let bestArr = null, bestKey = Infinity;
+    for (let r = 0; r < MAX; r++) {
+      const arr = params.fill > 0
+        ? generateMap(W, H, lps[r % lps.length], params.diff, 0, { mask: mask || null, overflow: 0, fill: params.fill, bounds: null })
+        : autoGenerate(W, H, params.diff, 0, params.longPref, mask || null, 0, null, target, null);
+      if (!arr || arr.length < 2 || !solve(arr, W, H).solvable) continue;
+      const pre = computeDifficulty(arr, W, H);
+      if (pre.tier === "KẸT") continue;
+      const fd = params.fill > 0 ? Math.abs(coverFrac(arr, mask, W, H) - params.fill * 100) : 0;
+      const dd = target ? Math.abs(pre.score - target) : 0;
+      if (fd > WIDE || dd > WIDE) continue;
+      const key = dd * 10 + fd;   // ưu tiên độ khó đúng
+      if (key < bestKey) { bestKey = key; bestArr = arr; }
+      if (fd <= 3 && dd <= 3) break;   // bậc tốt nhất -> lấy luôn
     }
+    if (!bestArr) return null;
+    const arr = bestArr;
+    let mothers = [];
+    if (params.mother) { mothers = buildMother(arr, W, H, 1, mask ? Array.from(mask) : null); if (mothers.length && !solve(arr.concat(mothers), W, H).solvable) mothers = []; }
     const all = arr.concat(mothers);
     const d = computeDifficulty(all, W, H);
     if (d.tier === "KẸT") return null;
-    // Chỉ số chi tiết
     const a = analyzeSolve(all, W, H);
     const area = mask ? mask.size : W * H;
-    let covered = 0;
-    for (const p of all) for (const c of p.cells) if (!mask || mask.has(c.x + "," + c.y)) covered++;
+    let covered = 0; for (const p of all) for (const c of p.cells) if (!mask || mask.has(c.x + "," + c.y)) covered++;
     const fillReal = area ? Math.round(covered / area * 100) : 0;
+    const fillDelta = params.fill > 0 ? Math.abs(fillReal - params.fill * 100) : 0;
+    const diffDelta = target ? Math.abs(d.score - target) : 0;
+    if (fillDelta > WIDE || diffDelta > WIDE) return null;   // rắn mẹ đẩy ra ngoài ±7 -> bỏ
     return {
       w: W, h: H, par: all.length, score: d.score, tier: d.tier, emoji: d.emoji,
       fillReal, empty: Math.max(0, area - covered), turns: a.turns,
       t1Pct: all.length ? Math.round(a.t1Avail / all.length * 100) : 0, stuck: a.stuck,
+      fillDelta, diffDelta,
       pieces: all.map(p => ({ dir: p.dir, cells: p.cells.map(c => [c.x, c.y]), ...(p.mother ? { mother: true } : {}) })),
     };
   }
@@ -358,26 +378,20 @@
 self.onmessage = function (e) {
   var m = e.data;
   var mask = m.maskArr ? new Set(m.maskArr) : null;
-  var out = [];
-  for (var i = 0; i < m.targets.length; i++) {
-    var lvl = null;
-    for (var r = 0; r < 3 && !lvl; r++) {
-      var cand = genLevelCore(m.W, m.H, mask, m.targets[i], m.params);
-      if (!cand) continue;
-      if (m.params.fill > 0 && Math.abs(cand.fillReal - m.params.fill * 100) > 3 && r < 2) continue;  // fill lệch setting -> thử lại
-      lvl = cand;
-    }
-    out.push(lvl);
-    if ((i & 7) === 7) self.postMessage({ type: 'progress', n: m.n, done: i + 1 });
+  var L = m.targets.length, ti = m.n, nullStreak = 0;   // lệch + nhảy stride để phủ target khác nhau
+  for (;;) {                            // nhà máy: sinh liên tục, stream level (kèm deltas); main quyết định nhận theo bậc
+    var target = m.targets[((ti % L) + L) % L]; ti += m.stride;
+    var lvl = genLevelCore(m.W, m.H, mask, target, m.params);   // null nếu ngoài ±7/±7
+    if (lvl) { lvl.target = target; self.postMessage(lvl); nullStreak = 0; }
+    else { nullStreak++; if (nullStreak >= 60) { self.postMessage({ hb: 60 }); nullStreak = 0; } }  // báo "đã thử nhiều, chưa ra"
   }
-  self.postMessage({ type: 'done', n: m.n, results: out });
 };`;
 
   function buildWorkerURL() {
     if (B.workerURL) return B.workerURL;
     const fns = [clamp, inBoard, solve, depMetrics, movableList, analyzeSolve, percRisk, percDynamic,
       computeDifficulty, rint, shuffle, growSnake, snakeLen, generateMap, coverageCount, autoGenerate,
-      traceBorder, motherFromLoop, buildMother, dirFromTo, genLevelCore];
+      traceBorder, motherFromLoop, buildMother, dirFromTo, coverFrac, genLevelCore];
     let src = '"use strict";\n';
     src += "var DIRS=" + JSON.stringify(DIRS) + ";\n";
     src += "var DELTA=" + JSON.stringify(DELTA) + ";\n";
@@ -392,94 +406,67 @@ self.onmessage = function (e) {
     const cores = navigator.hardwareConcurrency || 4;
     return Math.max(1, Math.min(cores, 8, Math.ceil(count / 4)));
   }
-  // Sinh song song bằng N worker; resolve -> mảng level (đúng thứ tự), reject nếu lỗi/hủy.
-  function runParallel(W, H, maskArr, targets, params, onProgress) {
-    return new Promise((resolve, reject) => {
-      let url; try { url = buildWorkerURL(); } catch (err) { return reject(err); }
-      const N = workerCount(targets.length), chunk = Math.ceil(targets.length / N);
-      const results = new Array(targets.length), localDone = [], workers = [];
-      let finished = 0, dead = false;
+  // Bậc chấp nhận [fillTol%, diffTol điểm] — ưu tiên độ khó đúng (nới fill trước, độ khó sau cùng).
+  const TIERS = [[3, 3], [5, 3], [7, 3], [7, 7]];
+  const ESCALATE = 140;   // số "trượt" liên tiếp ở 1 bậc -> nới lên bậc kế (KHÔNG giới hạn thời gian)
+  const GIVEUP = 4000;    // ở bậc rộng nhất mà vẫn trượt tới mức này -> coi như board không sinh nổi (chống treo)
+  // Sinh SONG SONG kiểu STREAM: worker stream level (kèm deltas); main nhận theo bậc, nới bậc khi kẹt.
+  // resolve: 'done' | 'cancel' | 'exhausted' | 'fallback'.
+  function runParallelStream(W, H, maskArr, targets, params, dedup, seen, count, onAccept) {
+    return new Promise((resolve) => {
+      let url; try { url = buildWorkerURL(); } catch (e) { resolve("fallback"); return; }
+      const N = workerCount(count), workers = [];
+      let dead = false, made = 0, tier = 0, stale = 0;
       B.activeWorkers = workers;
-      const cleanup = () => { workers.forEach(w => { try { w.terminate(); } catch (e) {} }); B.activeWorkers = null; B.cancelParallel = null; };
-      const totalProg = () => localDone.reduce((a, b) => a + (b || 0), 0);
-      B.cancelParallel = () => { if (!dead) { dead = true; cleanup(); reject("cancel"); } };
-      let launched = 0;
-      for (let n = 0; n < N; n++) {
-        const start = n * chunk, slice = targets.slice(start, start + chunk);
-        if (!slice.length) break;
-        let w; try { w = new Worker(url); } catch (err) { if (!dead) { dead = true; cleanup(); reject(err); } return; }
-        launched++; workers.push(w); w._start = start; localDone[n] = 0;
+      const finish = (r) => { if (dead) return; dead = true; workers.forEach(w => { try { w.terminate(); } catch (e) {} }); B.activeWorkers = null; B.cancelParallel = null; resolve(r); };
+      B.cancelParallel = () => finish("cancel");
+      const onStale = (n) => { stale += n; if (stale >= ESCALATE) { if (tier < TIERS.length - 1) { tier++; stale = 0; } else if (stale >= GIVEUP) finish("exhausted"); } };
+      for (let i = 0; i < N; i++) {
+        let w; try { w = new Worker(url); } catch (e) { finish("fallback"); return; }
+        workers.push(w);
         w.onmessage = ev => {
-          const m = ev.data; if (dead) return;
-          if (m.type === "progress") { localDone[m.n] = m.done; onProgress(totalProg()); }
-          else if (m.type === "done") {
-            localDone[m.n] = m.results.length;
-            for (let j = 0; j < m.results.length; j++) results[w._start + j] = m.results[j];
-            onProgress(totalProg());
-            if (++finished === workers.length) { cleanup(); resolve(results); }
-          }
+          if (dead) return;
+          const data = ev.data;
+          if (data.hb) { onStale(data.hb); return; }   // worker báo đã thử nhiều mà chưa ra
+          const lvl = data;
+          if (dedup) { const sig = levelSignature(lvl.pieces); if (seen.has(sig)) return; seen.add(sig); }
+          if (lvl.fillDelta <= TIERS[tier][0] && lvl.diffDelta <= TIERS[tier][1]) {
+            made = onAccept(lvl, tier); stale = 0;
+            if (made >= count) finish("done");
+          } else onStale(1);   // level có nhưng chưa đạt bậc hiện tại
         };
-        w.onerror = err => { if (!dead) { dead = true; cleanup(); reject(err.message || "worker error"); } };
-        w.postMessage({ n, W, H, maskArr, targets: slice, params });
+        w.onerror = () => finish("fallback");
+        w.postMessage({ n: i, stride: N, W, H, maskArr, targets, params });
       }
-      if (launched === 0) resolve([]);
+      if (!workers.length) finish("done");
     });
   }
-  // Đưa mảng kết quả (level | null) vào thư viện, dedup nếu cần.
-  function ingestLevels(levels, targets, startId, dedup) {
-    const seen = new Set(); let made = 0, skipped = 0;
-    for (let i = 0; i < levels.length; i++) {
-      const lvl = levels[i]; if (!lvl) continue;
-      if (dedup) { const sig = levelSignature(lvl.pieces); if (seen.has(sig)) { skipped++; continue; } seen.add(sig); }
-      lvl.id = startId + made; lvl.target = targets[i];
-      B.library.push(lvl); B.selection.add(lvl.id); made++;
-    }
-    return { made, skipped };
-  }
-  function setProg(done, total, made, tag) {
-    $b("bProgBar").style.width = Math.round(done / total * 100) + "%";
-    $b("bProgInfo").textContent = `Đang sinh… ${done}/${total}${tag ? " " + tag : ""} · tạo ${made}`;
-  }
-  // Tuần tự trên main thread (time-sliced) — fallback / khi tắt song song.
-  async function runSequential(W, H, mask, targets, params, dedup, startId) {
-    const seen = new Set(); let made = 0, skipped = 0, t0 = performance.now();
-    for (let i = 0; i < targets.length; i++) {
-      if (B.cancel) break;
-      let lvl = null;
-      for (let r = 0; r < 3 && !lvl; r++) {
-        const cand = genLevelCore(W, H, mask, targets[i], params);
-        if (!cand) continue;
-        if (params.fill > 0 && Math.abs(cand.fillReal - params.fill * 100) > 3 && r < 2) continue;  // fill lệch setting -> thử lại
-        if (dedup) { const sig = levelSignature(cand.pieces); if (seen.has(sig)) { if (r < 2) continue; skipped++; break; } seen.add(sig); }
-        lvl = cand;
+  // Tuần tự (fallback / tắt song song) — cùng cơ chế bậc.
+  async function runSequentialStream(W, H, mask, targets, params, dedup, seen, count, onAccept) {
+    let made = 0, idx = 0, tier = 0, stale = 0, iters = 0;
+    while (made < count && !B.cancel) {
+      iters++;
+      const target = targets[idx % targets.length]; idx++;
+      const lvl = genLevelCore(W, H, mask, target, params);
+      let accepted = false;
+      if (lvl) {
+        let dup = false;
+        if (dedup) { const sig = levelSignature(lvl.pieces); if (seen.has(sig)) dup = true; else seen.add(sig); }
+        if (!dup && lvl.fillDelta <= TIERS[tier][0] && lvl.diffDelta <= TIERS[tier][1]) { lvl.target = target; made = onAccept(lvl, tier); accepted = true; }
       }
-      if (lvl) { lvl.id = startId + made; lvl.target = targets[i]; B.library.push(lvl); B.selection.add(lvl.id); made++; }
-      if (performance.now() - t0 > 40 || i === targets.length - 1) {
-        setProg(i + 1, targets.length, made, ""); await new Promise(r => requestAnimationFrame(r)); t0 = performance.now();
-      }
+      if (accepted) stale = 0;
+      else { stale++; if (stale >= ESCALATE) { if (tier < TIERS.length - 1) { tier++; stale = 0; } else if (stale >= GIVEUP) break; } }
+      if (iters % 5 === 0 || made >= count) await new Promise(r => requestAnimationFrame(r));
     }
-    return { made, skipped };
   }
 
-  // ---------- Đo dải độ khó của board (probe nhiều mức fill) ----------
-  async function measureRange() {
-    if (B.generating) return;
-    const mask = currentMask();
-    if ((B.layoutType === "image" || B.layoutType === "paint") && (!mask || !mask.size)) { $b("bMeasureInfo").textContent = "⚠ Mask rỗng — chỉnh layout trước."; return; }
-    const W = B.W, H = B.H, diff = clamp(+$b("bDiff").value, 0, 100), longPref = clamp(+$b("bLong").value, 0, 100);
-    const fills = (W * H > 1500) ? [0.40, 0.62, 0.85] : [0.35, 0.50, 0.65, 0.80, 0.92];
-    $b("bMeasureInfo").textContent = "Đang đo…";
-    const scores = [];
-    for (const f of fills) {
-      for (let k = 0; k < 2; k++) {
-        const arr = generateMap(W, H, longPref, diff, 0, { mask: mask || null, overflow: 0, fill: f, bounds: null });
-        if (arr.length >= 2 && solve(arr, W, H).solvable) { const d = computeDifficulty(arr, W, H); if (d.tier !== "KẸT") scores.push(d.score); }
-        await new Promise(r => requestAnimationFrame(r));
-      }
-    }
-    if (!scores.length) { $b("bMeasureInfo").textContent = "Không đo được (board quá nhỏ / mask rỗng?)."; return; }
-    const min = Math.min(...scores), max = Math.max(...scores), avg = Math.round(scores.reduce((a, b) => a + b, 0) / scores.length);
-    $b("bMeasureInfo").innerHTML = `Board này sinh được khó <b>${min}–${max}</b> (TB ${avg}). Đặt curve trong dải này để không bị lệch target.`;
+  // ---------- Dải điểm thực tế của thư viện (tự cập nhật sau khi sinh / import) ----------
+  function updateRangeInfo() {
+    const el = $b("bMeasureInfo"); if (!el) return;
+    if (!B.library.length) { el.textContent = ""; return; }
+    let mn = 100, mx = 0, sum = 0, n = 0;
+    for (const l of B.library) { if (l.score == null) continue; if (l.score < mn) mn = l.score; if (l.score > mx) mx = l.score; sum += l.score; n++; }
+    el.innerHTML = n ? `Thư viện <b>${B.library.length}</b> level · khó <b>${mn}–${mx}</b> (TB ${Math.round(sum / n)})` : "";
   }
 
   // ---------- Sinh hàng loạt ----------
@@ -490,35 +477,38 @@ self.onmessage = function (e) {
     if (B.layoutType === "paint" && (!mask || !mask.size)) { $b("bProgInfo").textContent = "⚠ Chưa vẽ ô nào."; return; }
     const count = clamp(+$b("bCount").value, 1, 1000);
     const targets = sampleCurve(B.curve, count);
-    const params = { diff: clamp(+$b("bDiff").value, 0, 100), longPref: clamp(+$b("bLong").value, 0, 100), mother: $b("bMother").checked, fill: clamp(+$b("bFill").value, 0, 100) / 100 };
+    const params = { diff: 50, longPref: 55, mother: $b("bMother").checked, fill: clamp(+$b("bFill").value, 0, 100) / 100 };   // độ-phụ-thuộc & ưu-tiên-dài dùng mặc định cố định
     const dedup = $b("bDedup").checked, W = B.W, H = B.H, startId = nextLibId();
     const wantParallel = $b("bParallel").checked && typeof Worker !== "undefined" && count >= 8;
 
     B.generating = true; B.cancel = false;
     $b("bGenerate").disabled = true; $b("bCancel").style.display = "inline-block";
     $b("bProgWrap").style.display = "block"; $b("bProgBar").style.width = "0%";
+    renderLibrary();   // hiện thư viện hiện có + đặt observer để appendLibCard hoạt động
 
-    let made = 0, skipped = 0, cancelled = false, mode = "1 luồng", errMsg = "";
+    const seen = new Set();
+    let made = 0, mode = "1 luồng", errMsg = "", cancelled = false;
+    const tierCounts = [0, 0, 0, 0];   // [±3, ±5 fill, ±7 fill, ±7 cả độ khó]
+    // mỗi level ĐẠT -> thêm thư viện + HIỆN CARD NGAY + tăng tiến độ (chỉ tăng khi đạt). Trả `made` mới.
+    const onAccept = (lvl, tier) => {
+      lvl.id = startId + made; lvl.tierUsed = tier; B.library.push(lvl); B.selection.add(lvl.id); made++;
+      if (tier >= 0 && tier < 4) tierCounts[tier]++;
+      appendLibCard(lvl);
+      $b("bProgBar").style.width = Math.round(made / count * 100) + "%";
+      $b("bProgInfo").textContent = `Đang sinh… ${made}/${count} đạt`;
+      return made;
+    };
     try {
       if (wantParallel) {
-        const N = workerCount(count);
-        try {
-          const levels = await runParallel(W, H, mask ? Array.from(mask) : null, targets, params,
-            d => setProg(d, count, "…", `(song song · ${N} luồng)`));
-          const res = ingestLevels(levels, targets, startId, dedup);
-          made = res.made; skipped = res.skipped; mode = N + " luồng";
-        } catch (err) {
-          if (err === "cancel") { cancelled = true; }
-          else {   // worker lỗi/bị chặn -> tự chuyển 1 luồng
-            console.warn("[Sinh hàng loạt] worker lỗi, chuyển 1 luồng:", err);
-            $b("bProgInfo").textContent = "⚠ Worker lỗi — chuyển sang 1 luồng…";
-            const res = await runSequential(W, H, mask, targets, params, dedup, startId);
-            made = res.made; skipped = res.skipped; cancelled = B.cancel;
-          }
+        const N = workerCount(count); mode = N + " luồng";
+        const r = await runParallelStream(W, H, mask ? Array.from(mask) : null, targets, params, dedup, seen, count, onAccept);
+        if (r === "cancel") cancelled = true;
+        else if (r === "fallback") {   // worker bị chặn/lỗi -> 1 luồng
+          $b("bProgInfo").textContent = "⚠ Worker bị chặn — chuyển 1 luồng…"; mode = "1 luồng";
+          await runSequentialStream(W, H, mask, targets, params, dedup, seen, count, onAccept); cancelled = B.cancel;
         }
       } else {
-        const res = await runSequential(W, H, mask, targets, params, dedup, startId);
-        made = res.made; skipped = res.skipped; cancelled = B.cancel;
+        await runSequentialStream(W, H, mask, targets, params, dedup, seen, count, onAccept); cancelled = B.cancel;
       }
     } catch (err) {
       errMsg = (err && err.message) ? err.message : String(err);
@@ -526,10 +516,14 @@ self.onmessage = function (e) {
     } finally {
       B.generating = false; B.cancelParallel = null;
       $b("bGenerate").disabled = false; $b("bCancel").style.display = "none";
+      const relaxed = tierCounts[1] + tierCounts[2] + tierCounts[3];
+      const tierTxt = relaxed === 0 ? " (tất cả khít ±3%)"
+        : ` · ±3%: ${tierCounts[0]}` + (tierCounts[1] ? `, fill±5%: ${tierCounts[1]}` : "") + (tierCounts[2] ? `, fill±7%: ${tierCounts[2]}` : "") + (tierCounts[3] ? `, nới khó±7: ${tierCounts[3]}` : "");
       $b("bProgInfo").textContent = errMsg
         ? "✗ Lỗi khi sinh: " + errMsg + " — mở Console (F12) xem chi tiết."
         : (cancelled ? "⛔ Đã hủy · " : `✓ Xong (${mode}) · `)
-          + `${made} level mới (tổng ${B.library.length})` + (skipped ? ` · bỏ ${skipped} trùng` : "");
+          + `${made}/${count} level` + tierTxt
+          + (!cancelled && made < count ? ` · THIẾU ${count - made} (board không sinh nổi kể cả nới ±7 → hạ fill / nới curve)` : "");
       setTimeout(() => { $b("bProgWrap").style.display = "none"; }, 1600);
       try { saveLibrary(); renderLibrary(); } catch (e2) { console.error("[Thư viện] lỗi render:", e2); }
     }
@@ -572,6 +566,27 @@ self.onmessage = function (e) {
     else if (B.sort === "scoreDesc") list.sort((a, b) => b.score - a.score);
     return list;
   }
+  function makeLibCard(lvl) {
+    const card = document.createElement("div");
+    card.className = "lib-card" + (B.selection.has(lvl.id) ? " sel" : "");
+    const top = document.createElement("div"); top.className = "lc-top";
+    const chk = document.createElement("input"); chk.type = "checkbox"; chk.className = "lc-chk"; chk.checked = B.selection.has(lvl.id);
+    chk.addEventListener("change", () => { chk.checked ? B.selection.add(lvl.id) : B.selection.delete(lvl.id); card.classList.toggle("sel", chk.checked); updateSelInfo(); });
+    const badge = document.createElement("span"); badge.className = "tierbadge " + (TIER_CLASS[lvl.tier] || "tier0");
+    badge.textContent = lvl.score + " " + (lvl.emoji || ""); badge.title = lvl.tier;
+    top.append(chk, badge); card.appendChild(top);
+    const cv = document.createElement("canvas"); cv.width = 120; cv.height = 120; cv._level = lvl; card.appendChild(cv); if (io) io.observe(cv);
+    const meta = document.createElement("div"); meta.className = "lc-top";
+    meta.innerHTML = `<span>#${lvl.id}</span><span>${lvl.pieces.length} rắn${lvl.fillReal != null ? " · " + lvl.fillReal + "%" : ""}</span>`; card.appendChild(meta);
+    card.title = `Điểm ${lvl.score} ${lvl.tier}` + (lvl.target != null ? ` (muốn ${lvl.target})` : "")
+      + `\nRắn: ${lvl.pieces.length} · Lấp đầy: ${lvl.fillReal != null ? lvl.fillReal + "%" : "—"} · Trống: ${lvl.empty != null ? lvl.empty + " ô" : "—"}`
+      + `\nLượt giải: ${lvl.turns != null ? lvl.turns : "—"} · Thoát ngay lượt 1: ${lvl.t1Pct != null ? lvl.t1Pct + "%" : "—"} · Kẹt: ${lvl.stuck != null ? lvl.stuck : 0}`;
+    const act = document.createElement("div"); act.className = "lc-actions";
+    const playB = document.createElement("button"); playB.textContent = "▶"; playB.title = "Chơi"; playB.addEventListener("click", () => playLibrary(lvl.id));
+    const delB = document.createElement("button"); delB.textContent = "🗑"; delB.className = "danger"; delB.title = "Xóa"; delB.addEventListener("click", () => deleteLevel(lvl.id));
+    act.append(playB, delB); card.appendChild(act);
+    return card;
+  }
   function renderLibrary() {
     const grid = $b("bLibGrid"); grid.innerHTML = "";
     $b("bLibCount").textContent = B.library.length;
@@ -581,30 +596,20 @@ self.onmessage = function (e) {
     }, { root: grid });
     const list = visibleList();
     B.displayOrder = list.map(l => l.id);
-    for (const lvl of list) {
-      const card = document.createElement("div");
-      card.className = "lib-card" + (B.selection.has(lvl.id) ? " sel" : "");
-      const top = document.createElement("div"); top.className = "lc-top";
-      const chk = document.createElement("input"); chk.type = "checkbox"; chk.className = "lc-chk"; chk.checked = B.selection.has(lvl.id);
-      chk.addEventListener("change", () => { chk.checked ? B.selection.add(lvl.id) : B.selection.delete(lvl.id); card.classList.toggle("sel", chk.checked); updateSelInfo(); });
-      const badge = document.createElement("span"); badge.className = "tierbadge " + (TIER_CLASS[lvl.tier] || "tier0");
-      badge.textContent = lvl.score + " " + (lvl.emoji || ""); badge.title = lvl.tier;
-      top.append(chk, badge); card.appendChild(top);
-      const cv = document.createElement("canvas"); cv.width = 120; cv.height = 120; cv._level = lvl; card.appendChild(cv); io.observe(cv);
-      const meta = document.createElement("div"); meta.className = "lc-top";
-      meta.innerHTML = `<span>#${lvl.id}</span><span>${lvl.pieces.length} rắn${lvl.fillReal != null ? " · " + lvl.fillReal + "%" : ""}</span>`; card.appendChild(meta);
-      card.title = `Điểm ${lvl.score} ${lvl.tier}` + (lvl.target != null ? ` (muốn ${lvl.target})` : "")
-        + `\nRắn: ${lvl.pieces.length} · Lấp đầy: ${lvl.fillReal != null ? lvl.fillReal + "%" : "—"} · Trống: ${lvl.empty != null ? lvl.empty + " ô" : "—"}`
-        + `\nLượt giải: ${lvl.turns != null ? lvl.turns : "—"} · Thoát ngay lượt 1: ${lvl.t1Pct != null ? lvl.t1Pct + "%" : "—"} · Kẹt: ${lvl.stuck != null ? lvl.stuck : 0}`;
-      const act = document.createElement("div"); act.className = "lc-actions";
-      const playB = document.createElement("button"); playB.textContent = "▶"; playB.title = "Chơi"; playB.addEventListener("click", () => playLibrary(lvl.id));
-      const delB = document.createElement("button"); delB.textContent = "🗑"; delB.className = "danger"; delB.title = "Xóa"; delB.addEventListener("click", () => deleteLevel(lvl.id));
-      act.append(playB, delB); card.appendChild(act);
-      grid.appendChild(card);
-    }
-    updateSelInfo();
+    for (const lvl of list) grid.appendChild(makeLibCard(lvl));
+    updateSelInfo(); updateRangeInfo();
   }
-  function updateSelInfo() { $b("bSelInfo").textContent = `${B.selection.size} đã chọn / ${B.library.length}`; }
+  function appendLibCard(lvl) {   // STREAMING: thêm 1 card vào cuối lưới (không render lại cả lưới)
+    const grid = $b("bLibGrid"); if (!grid) return;
+    grid.appendChild(makeLibCard(lvl));
+    $b("bLibCount").textContent = B.library.length;
+    B.displayOrder.push(lvl.id);
+  }
+  function updateSelInfo() {
+    $b("bSelInfo").textContent = `${B.selection.size} đã chọn / ${B.library.length}`;
+    const vis = visibleList(), allSel = vis.length > 0 && vis.every(l => B.selection.has(l.id));
+    const tg = $b("bSelToggle"); if (tg) tg.textContent = allSel ? "Bỏ chọn" : "Chọn hết";
+  }
   function deleteLevel(id) { B.library = B.library.filter(l => l.id !== id); B.selection.delete(id); saveLibrary(); renderLibrary(); }
   function selectedLevels() {
     const order = B.library.slice();
@@ -707,35 +712,106 @@ self.onmessage = function (e) {
     download(new Blob([JSON.stringify(pack, null, 2)], { type: "application/json" }), `arrowout-pack-${sel.length}.json`);
     $b("bSelInfo").textContent = `✓ Đã export pack ${sel.length} level`;
   }
+  // Nạp 1 mảng object level (mỗi object: format game / {w,h,pieces} / pack có .levels) vào thư viện. Trả số đã thêm.
+  function ingestLevels(arr) {
+    let startId = nextLibId(), added = 0;
+    for (const o of arr) {
+      let w, h, pieces;
+      if (isGameFormat(o)) {                                  // format game (lẻ hoặc trong pack)
+        const g = fromGameLevel(o); w = g.w; h = g.h;
+        pieces = g.pieces.map(p => ({ dir: p.dir, cells: p.cells.map(c => [c.x, c.y]), ...(typeof p.fixedColor === "number" ? { fixedColor: p.fixedColor } : {}) }));
+      } else {                                                // format cũ {w,h,pieces}
+        if (!o || !Array.isArray(o.pieces)) continue;
+        w = o.w || (o.grid && o.grid[0] ? o.grid[0].length : 0); h = o.h || (o.grid ? o.grid.length : 0);
+        pieces = o.pieces.map(p => ({ dir: p.dir, cells: p.cells.map(c => Array.isArray(c) ? [c[0], c[1]] : [c.x, c.y]), ...(p.mother ? { mother: true } : {}) }));
+      }
+      if (!w || !h || !pieces.length) continue;
+      const live = normPieces(pieces).map((p, i) => (p.id = i + 1, p));   // gán id để solve/analyzeSolve chạy đúng
+      // tính LẠI mọi thông số từ chính các con rắn (y như lúc tự sinh) — bỏ qua metadata sẵn có
+      const d = computeDifficulty(live, w, h);
+      const a = analyzeSolve(live, w, h);
+      const area = w * h;
+      let covered = 0; for (const p of live) covered += p.cells.length;
+      const fillReal = area ? Math.round(covered / area * 100) : 0;
+      const id = startId++;
+      B.library.push({
+        w, h, par: live.length, score: d.score, tier: d.tier, emoji: d.emoji,
+        fillReal, empty: Math.max(0, area - covered), turns: a.turns,
+        t1Pct: live.length ? Math.round(a.t1Avail / live.length * 100) : 0, stuck: a.stuck,
+        target: o.target, pieces, id,
+      });
+      B.selection.add(id); added++;
+    }
+    return added;
+  }
   function importPack(file) {
     const fr = new FileReader();
     fr.onload = () => {
       let data; try { data = JSON.parse(fr.result); } catch { $b("bSelInfo").textContent = "✗ File JSON không hợp lệ"; return; }
       const arr = Array.isArray(data) ? data : (isGameFormat(data) ? [data] : data.levels);   // 1 level game lẻ / mảng / pack
       if (!Array.isArray(arr)) { $b("bSelInfo").textContent = "✗ Không thấy level nào"; return; }
-      let startId = nextLibId(), added = 0;
-      for (const o of arr) {
-        let w, h, pieces;
-        if (isGameFormat(o)) {                                  // format game (lẻ hoặc trong pack)
-          const g = fromGameLevel(o); w = g.w; h = g.h;
-          pieces = g.pieces.map(p => ({ dir: p.dir, cells: p.cells.map(c => [c.x, c.y]), ...(typeof p.fixedColor === "number" ? { fixedColor: p.fixedColor } : {}) }));
-        } else {                                                // format cũ {w,h,pieces}
-          if (!o || !Array.isArray(o.pieces)) continue;
-          w = o.w || (o.grid && o.grid[0] ? o.grid[0].length : 0); h = o.h || (o.grid ? o.grid.length : 0);
-          pieces = o.pieces.map(p => ({ dir: p.dir, cells: p.cells.map(c => Array.isArray(c) ? [c[0], c[1]] : [c.x, c.y]), ...(p.mother ? { mother: true } : {}) }));
-        }
-        if (!w || !h || !pieces.length) continue;
-        const live = normPieces(pieces);
-        const d = computeDifficulty(live, w, h);
-        const id = startId++;
-        B.library.push({ w, h, par: o.par || pieces.length, score: o.score != null ? o.score : d.score, tier: o.tier || d.tier, emoji: d.emoji, target: o.target,
-          fillReal: o.fillReal, empty: o.empty, turns: o.turns, t1Pct: o.t1Pct, stuck: o.stuck, pieces, id });
-        B.selection.add(id); added++;
-      }
+      const added = ingestLevels(arr);
       saveLibrary(); renderLibrary();
       $b("bSelInfo").textContent = `✓ Đã import ${added} level`;
     };
     fr.readAsText(file);
+  }
+
+  // ---------- Đọc ZIP (giải nén STORE + DEFLATE) để import nhiều level cùng lúc ----------
+  async function inflateRaw(bytes) {
+    if (typeof DecompressionStream === "undefined") throw new Error("Trình duyệt không hỗ trợ giải nén DEFLATE. Hãy dùng ZIP export từ tool này (dạng store) hoặc cập nhật trình duyệt.");
+    const ds = new DecompressionStream("deflate-raw");
+    const ab = await new Response(new Blob([bytes]).stream().pipeThrough(ds)).arrayBuffer();
+    return new Uint8Array(ab);
+  }
+  // Trả [{name, bytes}] từ buffer ZIP. Đọc Central Directory (chuẩn) → từng local header → giải nén.
+  async function unzip(buf) {
+    const dv = new DataView(buf), u8 = new Uint8Array(buf);
+    let eo = -1;
+    for (let i = u8.length - 22; i >= 0 && i >= u8.length - 22 - 65536; i--) { if (dv.getUint32(i, true) === 0x06054b50) { eo = i; break; } }
+    if (eo < 0) throw new Error("Không phải file ZIP hợp lệ (thiếu EOCD).");
+    const cdCount = dv.getUint16(eo + 10, true);
+    let p = dv.getUint32(eo + 16, true);
+    const td = new TextDecoder(), out = [];
+    for (let n = 0; n < cdCount; n++) {
+      if (p + 46 > u8.length || dv.getUint32(p, true) !== 0x02014b50) break;
+      const method = dv.getUint16(p + 10, true);
+      const compSize = dv.getUint32(p + 20, true);
+      const nameLen = dv.getUint16(p + 28, true), extraLen = dv.getUint16(p + 30, true), cmtLen = dv.getUint16(p + 32, true);
+      const lho = dv.getUint32(p + 42, true);
+      const name = td.decode(u8.subarray(p + 46, p + 46 + nameLen));
+      const lNameLen = dv.getUint16(lho + 26, true), lExtraLen = dv.getUint16(lho + 28, true);
+      const dataStart = lho + 30 + lNameLen + lExtraLen;
+      const comp = u8.subarray(dataStart, dataStart + compSize);
+      if (method === 0) out.push({ name, bytes: comp });
+      else if (method === 8) { try { out.push({ name, bytes: await inflateRaw(comp) }); } catch (e) { console.error("[unzip] giải nén lỗi", name, e); } }
+      p += 46 + nameLen + extraLen + cmtLen;
+    }
+    return out;
+  }
+  async function importZip(file) {
+    $b("bSelInfo").textContent = "⏳ Đang đọc ZIP…";
+    try {
+      const entries = await unzip(await file.arrayBuffer());
+      const td = new TextDecoder(), levels = [];
+      let skipped = 0;
+      for (const e of entries) {
+        if (e.name.endsWith("/") || !/\.json$/i.test(e.name)) continue;            // chỉ nhận .json
+        if (/(^|\/)manifest\.json$/i.test(e.name)) continue;                       // bỏ manifest
+        let data; try { data = JSON.parse(td.decode(e.bytes)); } catch { skipped++; continue; }
+        if (Array.isArray(data)) levels.push(...data);                             // file là mảng level
+        else if (isGameFormat(data) || Array.isArray(data.pieces)) levels.push(data);  // 1 level lẻ
+        else if (Array.isArray(data.levels)) levels.push(...data.levels);          // pack lồng
+        else skipped++;
+      }
+      if (!levels.length) { $b("bSelInfo").textContent = "✗ ZIP không có level hợp lệ (cần file .json đúng format)."; return; }
+      const added = ingestLevels(levels);
+      saveLibrary(); renderLibrary();
+      $b("bSelInfo").textContent = `✓ Đã import ${added} level từ ZIP` + (skipped ? ` · bỏ qua ${skipped} file` : "");
+    } catch (err) {
+      $b("bSelInfo").textContent = "✗ Lỗi đọc ZIP: " + (err && err.message ? err.message : err);
+      console.error("[Import ZIP]", err);
+    }
   }
 
   // ---------- Nạp ảnh: file máy + kéo từ web ----------
@@ -822,8 +898,6 @@ self.onmessage = function (e) {
   $b("bPaintClear").addEventListener("click", () => { B.paint = new Set(); renderPreview(); });
   $b("bPaintInvert").addEventListener("click", () => { const n = new Set(); for (let y = 0; y < B.H; y++) for (let x = 0; x < B.W; x++) { const k = x + "," + y; if (!B.paint.has(k)) n.add(k); } B.paint = n; renderPreview(); });
 
-  $b("bDiff").addEventListener("input", () => $b("bDiffVal").textContent = $b("bDiff").value);
-  $b("bLong").addEventListener("input", () => $b("bLongVal").textContent = $b("bLong").value);
   function syncFillLabel() {
     const v = +$b("bFill").value;
     $b("bFillVal").textContent = v;
@@ -831,21 +905,24 @@ self.onmessage = function (e) {
   }
   $b("bFill").addEventListener("input", syncFillLabel);
   $b("bCount").addEventListener("input", updateCurveInfo);
-  $b("bMeasure").addEventListener("click", measureRange);
   $b("bGenerate").addEventListener("click", runBatch);
   $b("bCancel").addEventListener("click", () => { B.cancel = true; if (B.cancelParallel) B.cancelParallel(); });
 
   $b("bSort").addEventListener("change", () => { B.sort = $b("bSort").value; renderLibrary(); });
   $b("bFilter").addEventListener("change", () => { B.filter = $b("bFilter").value; renderLibrary(); });
-  $b("bSelAll").addEventListener("click", () => { visibleList().forEach(l => B.selection.add(l.id)); renderLibrary(); });
-  $b("bSelNone").addEventListener("click", () => { B.selection.clear(); renderLibrary(); });
-  $b("bSelInvert").addEventListener("click", () => { visibleList().forEach(l => B.selection.has(l.id) ? B.selection.delete(l.id) : B.selection.add(l.id)); renderLibrary(); });
+  $b("bSelToggle").addEventListener("click", () => {   // gộp Chọn hết / Bỏ chọn
+    const vis = visibleList(), allSel = vis.length > 0 && vis.every(l => B.selection.has(l.id));
+    if (allSel) B.selection.clear(); else vis.forEach(l => B.selection.add(l.id));
+    renderLibrary();
+  });
   $b("bDelSel").addEventListener("click", () => { B.library = B.library.filter(l => !B.selection.has(l.id)); B.selection.clear(); saveLibrary(); renderLibrary(); });
-  $b("bClearLib").addEventListener("click", () => { if (!B.library.length || confirm("Xóa toàn bộ thư viện?")) { B.library = []; B.selection.clear(); saveLibrary(); renderLibrary(); } });
   $b("bExportZip").addEventListener("click", exportZip);
-  $b("bExportPack").addEventListener("click", exportPack);
   $b("bImportBtn").addEventListener("click", () => $b("bImportPack").click());
-  $b("bImportPack").addEventListener("change", () => { if ($b("bImportPack").files[0]) importPack($b("bImportPack").files[0]); $b("bImportPack").value = ""; });
+  $b("bImportPack").addEventListener("change", () => {
+    const f = $b("bImportPack").files[0];
+    if (f) { if (/\.zip$/i.test(f.name) || f.type === "application/zip") importZip(f); else importPack(f); }
+    $b("bImportPack").value = "";
+  });
 
   // libPlayBar
   $b("libBackBtn").addEventListener("click", () => { state.mode = "batch"; state.fromLibrary = null; syncModeUI(); });
@@ -862,9 +939,10 @@ self.onmessage = function (e) {
   // Thả ảnh ở BẤT KỲ đâu khi đang ở chế độ Hàng loạt hoặc Editor — có lớp phủ chỉ dẫn.
   const dropOverlay = document.createElement("div");
   dropOverlay.id = "dropOverlay";
-  dropOverlay.textContent = "🖼️ Thả ảnh vào đây để nạp";
+  dropOverlay.textContent = "🖼️ Thả ảnh để nạp  ·  🗜️ Thả .zip để import level";
   document.body.appendChild(dropOverlay);
   const dndHasImage = e => e.dataTransfer && [...e.dataTransfer.types].some(t => t === "Files" || t === "text/uri-list" || t === "text/html");
+  const zipFromDataTransfer = dt => dt.files && [...dt.files].find(f => /\.zip$/i.test(f.name) || f.type === "application/zip");
   const dndMode = () => state.mode === "batch" || state.mode === "edit";
   let dragDepth = 0;
   const hideOverlay = () => { dragDepth = 0; dropOverlay.classList.remove("show"); };
@@ -876,6 +954,8 @@ self.onmessage = function (e) {
     if (!dndHasImage(e)) return;
     e.preventDefault(); hideOverlay();
     if (state.mode === "batch") {
+      const zf = zipFromDataTransfer(e.dataTransfer);
+      if (zf) { importZip(zf); return; }                               // thả .zip -> import level
       if (!imageFromDataTransfer(e.dataTransfer, setBatchImage)) $b("bLayoutInfo").textContent = "⚠ Không thấy ảnh trong nội dung kéo vào.";
     } else if (state.mode === "edit") {
       const ok = imageFromDataTransfer(e.dataTransfer, (img, fromWeb) => {
