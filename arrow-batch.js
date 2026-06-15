@@ -317,23 +317,182 @@
     cv.addEventListener("pointercancel", () => { painting = false; });
   })();
 
+  // ---------- Engine LẤP ĐẦY có-bảo-vệ-solvable (port từ tool teammate) ----------
+  // Xây TĂNG DẦN: mỗi lần đặt rắn đều kiểm tra CẢ BÀN vẫn giải được (isSolvable nhanh, Int32 phẳng)
+  // -> KHÔNG bao giờ tạo board KẸT -> nhanh + fill cao + luôn giải được. Trả [{id,dir,cells}] hoặc null.
+  // placeGuard cho phép rắn TẠM bị chặn (miễn tồn tại thứ tự gỡ hết) -> chuỗi phụ thuộc = độ khó.
+  function genFull(W, H, mask) {
+    const inMask = (x, y) => x >= 0 && x < W && y >= 0 && y < H && (!mask || mask.has(x + "," + y));
+    const DIRN = [{ dx: 0, dy: -1 }, { dx: 1, dy: 0 }, { dx: 0, dy: 1 }, { dx: -1, dy: 0 }];
+    const board = [];
+    for (let y = 0; y < H; y++) { const row = []; for (let x = 0; x < W; x++) row.push(inMask(x, y) ? 0 : null); board.push(row); }
+    let TC = 0; for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) if (board[y][x] === 0) TC++;
+    if (TC < 2) return null;
+    const snakes = []; let sid = 1;
+    const maxL = Math.max(6, Math.round(0.7 * (W + H)));   // trần độ dài ~35% chu vi
+    const straightBias = 0.88, lo = Math.min(maxL, 3);
+    const free = (x, y) => x >= 0 && x < W && y >= 0 && y < H && board[y][x] === 0;
+    const dirOf = cells => (cells.length < 2 ? null : dirFromTo(cells[1], cells[0]));
+    const curFill = () => snakes.reduce((a, s) => a + s.cells.length, 0) / TC;
+
+    function isSolvable() {   // solver "natural turn" trên lưới phẳng (nhanh)
+      const N = W * H, grid = new Int32Array(N);
+      for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) { const v = board[y][x]; grid[y * W + x] = (v === null) ? -1 : v; }
+      const n = snakes.length; let remaining = n; const done = new Uint8Array(n); let t = 0;
+      while (remaining > 0 && t < 500) {
+        let moved = 0;
+        for (let i = 0; i < n; i++) {
+          if (done[i]) continue; const s = snakes[i], hd = DELTA[s.dir]; if (!hd) continue;
+          let cx = s.cells[0].x + hd.x, cy = s.cells[0].y + hd.y, clear = true;
+          while (cx >= 0 && cx < W && cy >= 0 && cy < H) { const v = grid[cy * W + cx]; if (v === -1 || v === 0) { cx += hd.x; cy += hd.y; continue; } clear = false; break; }
+          if (clear) { for (const c of s.cells) grid[c.y * W + c.x] = 0; done[i] = 1; remaining--; moved++; }
+        }
+        if (!moved) return false; t++;
+      }
+      return remaining === 0;
+    }
+    function expLen() {   // 25% ngắn, 35% vừa, 40% dài (đuôi mũ)
+      const r = Math.random(); let L;
+      if (r < 0.25) L = Math.random() < 0.15 ? 2 : 3 + (Math.random() * 2 | 0);
+      else if (r < 0.6) L = 5 + (Math.random() * 5 | 0);
+      else L = 10 + Math.floor(-Math.log(Math.max(1e-9, Math.random())) / 0.07);
+      return Math.max(2, Math.min(maxL, L));
+    }
+    function grow(sx, sy, primary, tlen) {   // boustrophedon: đi thẳng 5-7 ô rồi gấp
+      const path = [{ x: sx, y: sy }]; board[sy][sx] = -9; let cur = { x: sx, y: sy }, d = primary, run = 0;
+      const turnAfter = 5 + (Math.random() * 3 | 0);
+      while (path.length < tlen) {
+        let perp = d.dx !== 0 ? [{ dx: 0, dy: 1 }, { dx: 0, dy: -1 }] : [{ dx: 1, dy: 0 }, { dx: -1, dy: 0 }];
+        if (Math.random() < 0.5) perp = [perp[1], perp[0]];
+        const force = run >= turnAfter;
+        const cands = force ? perp.concat([d]) : (Math.random() < straightBias ? [d].concat(perp) : perp.concat([d]));
+        let moved = false;
+        for (const dd of cands) { const nx = cur.x + dd.dx, ny = cur.y + dd.dy; if (nx >= 0 && nx < W && ny >= 0 && ny < H && board[ny][nx] === 0) { run = (dd === d) ? run + 1 : 0; board[ny][nx] = -9; path.push({ x: nx, y: ny }); cur = { x: nx, y: ny }; d = dd; moved = true; break; } }
+        if (!moved) break;
+      }
+      path.forEach(c => board[c.y][c.x] = 0);
+      return path;
+    }
+    function placeGuard(body) {   // thử orient & rút ngắn sao cho CẢ TẬP vẫn solvable
+      for (let L = body.length; L >= lo; L--) {
+        for (const cells of [body.slice(0, L), body.slice(0, L).reverse()]) {
+          if (cells.length < 2) continue;
+          const dir = dirOf(cells); if (!dir) continue;
+          const id = sid; for (const c of cells) board[c.y][c.x] = id;
+          snakes.push({ id, dir, cells: cells.map(c => ({ x: c.x, y: c.y })) });
+          if (isSolvable()) { sid++; return true; }
+          snakes.pop(); for (const c of cells) board[c.y][c.x] = 0;
+        }
+      }
+      return false;
+    }
+    function edgeCells() {   // viền THẬT của mask (đúng mọi hình)
+      const e = [];
+      for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+        if (board[y][x] !== 0) continue;
+        for (const d of DIRN) { const nx = x + d.dx, ny = y + d.dy; if (nx < 0 || nx >= W || ny < 0 || ny >= H || !inMask(nx, ny)) { e.push({ x, y }); break; } }
+      }
+      return e;
+    }
+    const allEmpty = () => { const a = []; for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) if (board[y][x] === 0) a.push({ x, y }); return a; };
+    function absorbEmpty() {   // lấp tối đa: nối ô trống vào ĐUÔI rồi ĐẦU rắn kề; cụm ≥2 -> rắn mới
+      let pass = 0;
+      while (pass++ < 10) {
+        let changed = false; const empties = allEmpty(); if (!empties.length) break;
+        for (const e of empties) {
+          if (board[e.y][e.x] !== 0) continue; let done2 = false;
+          for (const s of snakes) { const tl = s.cells[s.cells.length - 1];   // BỎ trần maxL ở bước lấp cuối -> ép đạt 100%
+            if (Math.abs(tl.x - e.x) + Math.abs(tl.y - e.y) === 1) { s.cells.push({ x: e.x, y: e.y }); board[e.y][e.x] = s.id; if (isSolvable()) { changed = done2 = true; break; } s.cells.pop(); board[e.y][e.x] = 0; } }
+          if (done2) continue;
+          for (const s of snakes) { const hd = s.cells[0];
+            if (Math.abs(hd.x - e.x) + Math.abs(hd.y - e.y) === 1) { s.cells.unshift({ x: e.x, y: e.y }); const o = s.dir; s.dir = dirOf(s.cells); board[e.y][e.x] = s.id; if (s.dir && isSolvable()) { changed = done2 = true; break; } s.cells.shift(); s.dir = o; board[e.y][e.x] = 0; } }
+        }
+        if (!changed) {
+          const remain = allEmpty(); if (!remain.length) break;
+          const seen = new Set(); let made = false;
+          for (const st0 of remain) { const k = st0.x + "," + st0.y; if (seen.has(k)) continue;
+            const cl = [], st = [st0]; seen.add(k);
+            while (st.length) { const c = st.pop(); cl.push(c); for (const d of DIRN) { const nx = c.x + d.dx, ny = c.y + d.dy, kk = nx + "," + ny; if (nx >= 0 && nx < W && ny >= 0 && ny < H && inMask(nx, ny) && board[ny][nx] === 0 && !seen.has(kk)) { seen.add(kk); st.push({ x: nx, y: ny }); } } }
+            if (cl.length >= 2) { const id = snakes.reduce((m, s) => Math.max(m, s.id), 0) + 1; const cells = cl.map(c => ({ x: c.x, y: c.y })); const dir = dirOf(cells);
+              if (dir) { for (const c of cells) board[c.y][c.x] = id; snakes.push({ id, dir, cells }); if (isSolvable()) made = true; else { for (const c of cells) board[c.y][c.x] = 0; snakes.pop(); } } } }
+          if (made) changed = true;
+        }
+        if (!changed) break;
+      }
+    }
+
+    // PHASE 1: rắn dài trước (sort giảm dần), 40% đầu bám viền (edge-first)
+    const nTarget = Math.round(W * H / 8), targets = [];
+    for (let i = 0; i < nTarget; i++) targets.push(expLen());
+    targets.sort((a, b) => b - a);
+    const skip = new Set();
+    for (let ti = 0; ti < targets.length; ti++) {
+      if (curFill() >= 1) break;
+      const empties = allEmpty().filter(c => !skip.has(c.x + "," + c.y));
+      if (!empties.length) break;
+      let seed, primary;
+      if (ti < targets.length * 0.4) {
+        const ec = edgeCells().filter(c => !skip.has(c.x + "," + c.y));
+        seed = ec.length ? ec[rint(ec.length)] : empties[rint(empties.length)];
+        let outDir = null;
+        for (const d of DIRN) { const nx = seed.x + d.dx, ny = seed.y + d.dy; if (nx < 0 || nx >= W || ny < 0 || ny >= H || !inMask(nx, ny)) { outDir = d; break; } }
+        if (outDir) { const perp = outDir.dx !== 0 ? [{ dx: 0, dy: 1 }, { dx: 0, dy: -1 }] : [{ dx: 1, dy: 0 }, { dx: -1, dy: 0 }]; primary = perp[rint(2)]; }
+        else primary = DIRN[rint(4)];
+      } else { seed = empties[rint(empties.length)]; primary = DIRN[rint(4)]; }
+      const body = grow(seed.x, seed.y, primary, targets[ti]);
+      if (body.length < 2 || !placeGuard(body)) skip.add(seed.x + "," + seed.y);
+    }
+    // PHASE 2: lấp khe bằng rắn ngắn
+    let guard = 0; const maxGuard = W * H * 3;
+    while (guard++ < maxGuard) {
+      if (curFill() >= 1) break;
+      const empties = allEmpty().filter(c => !skip.has(c.x + "," + c.y));
+      if (!empties.length) break;
+      const seed = empties[0], tlen = Math.max(2, Math.min(maxL, lo + rint(4)));
+      const body = grow(seed.x, seed.y, DIRN[rint(4)], tlen);
+      if (body.length < 2 || !placeGuard(body)) skip.add(seed.x + "," + seed.y);
+    }
+    // FILL BOOST B1: kéo dài đuôi rắn (giữ solvable, không vụn)
+    { let changed = true, rounds = 0;
+      while (changed && rounds++ < 30) {
+        if (curFill() >= 1) break; changed = false;
+        for (const sn of snakes) {
+          if (sn.cells.length >= maxL) continue;
+          const tail = sn.cells[sn.cells.length - 1];
+          for (const d of DIRN) { const nx = tail.x + d.dx, ny = tail.y + d.dy; if (free(nx, ny)) { sn.cells.push({ x: nx, y: ny }); board[ny][nx] = sn.id; if (isSolvable()) { changed = true; break; } sn.cells.pop(); board[ny][nx] = 0; } }
+        }
+      }
+      // B2: nhồi rắn 2 ô vào ô lẻ, dừng khi rắn-ngắn > 12%
+      for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+        if (board[y][x] !== 0) continue;
+        const cur2 = snakes.filter(s => s.cells.length === 2).length;
+        if (snakes.length && cur2 / snakes.length >= 0.12) break;
+        for (const d of DIRN) { const nx = x + d.dx, ny = y + d.dy; if (free(nx, ny)) { const cells = [{ x, y }, { x: nx, y: ny }], dir = dirOf(cells); if (!dir) break; const id = sid; for (const c of cells) board[c.y][c.x] = id; snakes.push({ id, dir, cells }); if (isSolvable()) { sid++; break; } snakes.pop(); for (const c of cells) board[c.y][c.x] = 0; } }
+      }
+    }
+    absorbEmpty();   // lấp tối đa -> fill sát 100%
+    if (snakes.length < 2) return null;
+    return snakes.map((s, i) => ({ id: i + 1, dir: s.dir, cells: s.cells.map(c => ({ x: c.x, y: c.y })) }));
+  }
+
   // ---------- Sinh 1 level theo target (pure — dùng cả ở main thread & worker) ----------
-  // LUÔN LẤP ĐẦY bố cục (fill=1) rồi đo độ khó; trả map có độ khó GẦN target nhất (kèm diffDelta).
-  // Vòng ngoài chỉ nhận khi diffDelta ≤ ±3. Trả null nếu board không sinh nổi map giải được (hiếm).
+  // genFull cho board LẤP ĐẦY + LUÔN GIẢI ĐƯỢC; CHỈ nhận map fill ĐÚNG 100% (chưa kín -> loại).
+  // Thử vài cách xếp, trả map 100%-fill có độ khó GẦN target nhất. Trả null nếu không ra map nào.
   function genLevelCore(W, H, mask, target, params) {
-    const MAX = 12;
-    const lps = [55, 25, 85, 40, 70, 15, 95, 50, 30, 65];   // đổi ưu-tiên-rắn-dài mỗi lần để đa dạng cách xếp
+    const MAX = 4, fullArea = mask ? mask.size : W * H;
     let bestArr = null, bestDd = Infinity;
     for (let r = 0; r < MAX; r++) {
-      const arr = generateMap(W, H, lps[r % lps.length], params.diff, 0, { mask: mask || null, overflow: 0, fill: 1, bounds: null });
-      if (!arr || arr.length < 2 || !solve(arr, W, H).solvable) continue;
+      const arr = genFull(W, H, mask);
+      if (!arr || arr.length < 2) continue;
+      let cov = 0; for (const p of arr) cov += p.cells.length;   // rắn chỉ nằm trong mask -> cov = ô đã phủ
+      if (cov !== fullArea) continue;   // CHƯA KÍN 100% -> loại, thử cách xếp khác
       const pre = computeDifficulty(arr, W, H);
-      if (pre.tier === "KẸT") continue;
+      if (pre.tier === "KẸT") continue;   // genFull đảm bảo solvable nên gần như không xảy ra
       const dd = target ? Math.abs(pre.score - target) : 0;
       if (dd < bestDd) { bestDd = dd; bestArr = arr; }
-      if (dd <= 3) break;   // đã khít -> lấy luôn
+      if (dd === 0) break;   // đã đúng điểm -> lấy luôn
     }
-    if (!bestArr) return null;   // board không sinh nổi map giải được (hiếm) -> worker phát heartbeat
+    if (!bestArr) return null;
     const arr = bestArr;
     let mothers = [];
     if (params.mother) { mothers = buildMother(arr, W, H, 1, mask ? Array.from(mask) : null); if (mothers.length && !solve(arr.concat(mothers), W, H).solvable) mothers = []; }
@@ -368,7 +527,7 @@ self.onmessage = function (e) {
   var L = m.targets.length, ti = m.n, nullStreak = 0;   // lệch + nhảy stride để phủ target khác nhau
   for (;;) {                            // nhà máy: sinh liên tục, stream level (kèm deltas); main quyết định nhận theo bậc
     var target = m.targets[((ti % L) + L) % L]; ti += m.stride;
-    var lvl = genLevelCore(m.W, m.H, mask, target, m.params);   // null nếu ngoài ±7/±7
+    var lvl = genLevelCore(m.W, m.H, mask, target, m.params);   // map fill 100% giải-được, kèm điểm khó
     if (lvl) { lvl.target = target; self.postMessage(lvl); nullStreak = 0; }
     else { nullStreak++; if (nullStreak >= 60) { self.postMessage({ hb: 60 }); nullStreak = 0; } }  // báo "đã thử nhiều, chưa ra"
   }
@@ -378,7 +537,7 @@ self.onmessage = function (e) {
     if (B.workerURL) return B.workerURL;
     const fns = [clamp, inBoard, solve, depMetrics, movableList, analyzeSolve, percRisk, percDynamic,
       computeDifficulty, rint, shuffle, growSnake, snakeLen, generateMap, coverageCount, autoGenerate,
-      traceBorder, motherFromLoop, buildMother, dirFromTo, genLevelCore];
+      traceBorder, motherFromLoop, buildMother, dirFromTo, genFull, genLevelCore];
     let src = '"use strict";\n';
     src += "var DIRS=" + JSON.stringify(DIRS) + ";\n";
     src += "var DELTA=" + JSON.stringify(DELTA) + ";\n";
@@ -392,28 +551,30 @@ self.onmessage = function (e) {
   function workerCount() {   // dùng HẾT số nhân CPU (bỏ trần 8) — vượt số nhân không nhanh hơn vì CPU-bound
     return Math.max(2, navigator.hardwareConcurrency || 4);
   }
-  // VÉT CẠN CHÍNH XÁC: chỉ nhận map khít ±3 (độ khó), sinh VÔ HẠN tới khi đủ (hoặc Hủy).
-  const STRICT_DIFF = 3;
-  // Hạn ngạch theo từng điểm độ khó trên curve: mỗi slot 1 ô cần lấp -> phân bố đúng đường cong.
-  function buildQuota(targets) { const q = new Map(); for (const t of targets) q.set(t, (q.get(t) || 0) + 1); return q; }
-  // Tìm slot CHƯA đầy gần điểm độ khó của level nhất; trả target nếu trong ±3, else null.
-  function matchSlot(lvl, quota) {
-    let bestT = null, bestD = Infinity;
-    for (const [t, rem] of quota) if (rem > 0) { const dd = Math.abs(t - lvl.score); if (dd < bestD) { bestD = dd; bestT = t; } }
-    return (bestT !== null && bestD <= STRICT_DIFF) ? bestT : null;
+  // VÉT CẠN CHÍNH XÁC: chỉ nhận map có điểm ĐÚNG BẰNG target (score===target, fill 100%), sinh VÔ HẠN tới khi đủ.
+  // computeDifficulty tất định nên 1 board luôn ra cùng điểm -> khớp chính xác là hợp lệ.
+  const STRICT_DIFF = 0;
+  // Mỗi điểm trên curve = 1 SLOT có CHỈ SỐ i (giữ ĐÚNG vị trí đường cong). id level = startId + i,
+  // nên dù worker hoàn thành lệch thứ tự thì id vẫn map đúng vị trí curve.
+  function buildSlots(targets) { return targets.map((t, i) => ({ i, target: t, filled: false })); }
+  // Tìm slot CHƯA đầy có điểm khớp (|Δ|≤STRICT_DIFF) gần nhất; trả CHỈ SỐ slot, else -1.
+  function matchSlot(score, slots) {
+    let bestI = -1, bestD = Infinity;
+    for (const s of slots) { if (s.filled) continue; const d = Math.abs(s.target - score); if (d < bestD) { bestD = d; bestI = s.i; } }
+    return (bestI >= 0 && bestD <= STRICT_DIFF) ? bestI : -1;
   }
-  // Sinh SONG SONG kiểu STREAM: worker stream level; main gắn vào slot curve còn trống nếu khít ±3.
+  // Sinh SONG SONG kiểu STREAM: worker stream level; main gắn vào slot curve còn trống nếu điểm KHỚP CHÍNH XÁC.
   // resolve: 'done' | 'cancel' | 'fallback'  (KHÔNG có 'exhausted' — grind tới khi đủ).
   function runParallelStream(W, H, maskArr, targets, params, dedup, seen, count, onAccept) {
     return new Promise((resolve) => {
       let url; try { url = buildWorkerURL(); } catch (e) { resolve("fallback"); return; }
       const N = workerCount(), workers = [];
-      const quota = buildQuota(targets);
+      const slots = buildSlots(targets);
       let dead = false, made = 0, tried = 0, lastPaint = 0;
       B.activeWorkers = workers;
       const finish = (r) => { if (dead) return; dead = true; workers.forEach(w => { try { w.terminate(); } catch (e) {} }); B.activeWorkers = null; B.cancelParallel = null; resolve(r); };
       B.cancelParallel = () => finish("cancel");
-      const hint = () => { if (tried - lastPaint >= 200) { lastPaint = tried; $b("bProgInfo").textContent = `Vét cạn ±3… ${made}/${count} đạt · đã thử ${tried} (đang tìm các mức khó còn thiếu)`; } };
+      const hint = () => { if (tried - lastPaint >= 200) { lastPaint = tried; $b("bProgInfo").textContent = `Vét cạn (điểm chính xác)… ${made}/${count} đạt · đã thử ${tried} (đang tìm các mức còn thiếu)`; } };
       for (let i = 0; i < N; i++) {
         let w; try { w = new Worker(url); } catch (e) { finish("fallback"); return; }
         workers.push(w);
@@ -423,10 +584,10 @@ self.onmessage = function (e) {
           if (data.hb) { tried += data.hb; hint(); return; }
           const lvl = data;
           if (dedup) { const sig = levelSignature(lvl.pieces); if (seen.has(sig)) { return; } seen.add(sig); }
-          const slot = matchSlot(lvl, quota);
-          if (slot !== null) {
-            quota.set(slot, quota.get(slot) - 1); lvl.target = slot; lvl.diffDelta = Math.abs(lvl.score - slot);
-            made = onAccept(lvl);
+          const slot = matchSlot(lvl.score, slots);
+          if (slot >= 0) {
+            slots[slot].filled = true; lvl.target = slots[slot].target; lvl.diffDelta = Math.abs(lvl.score - lvl.target);
+            made = onAccept(lvl, slot);
             if (made >= count) finish("done");
           } else { tried++; hint(); }
         };
@@ -438,19 +599,21 @@ self.onmessage = function (e) {
   }
   // Tuần tự (fallback / tắt song song) — cùng cơ chế hạn ngạch + grind vô hạn.
   async function runSequentialStream(W, H, mask, targets, params, dedup, seen, count, onAccept) {
-    const quota = buildQuota(targets);
+    const slots = buildSlots(targets);
     let made = 0, idx = 0, iters = 0, tried = 0, lastPaint = 0;
     while (made < count && !B.cancel) {
       iters++;
-      const target = targets[idx % targets.length]; idx++;
-      const lvl = genLevelCore(W, H, mask, target, params);
+      // ưu tiên nhắm vào slot CHƯA đầy (xoay vòng) để genFull có target kéo
+      let pick = -1; for (let k = 0; k < slots.length; k++) { const j = (idx + k) % slots.length; if (!slots[j].filled) { pick = j; break; } }
+      idx++; if (pick < 0) break;
+      const lvl = genLevelCore(W, H, mask, slots[pick].target, params);
       let accepted = false;
       if (lvl) {
         let dup = false;
         if (dedup) { const sig = levelSignature(lvl.pieces); if (seen.has(sig)) dup = true; else seen.add(sig); }
-        if (!dup) { const slot = matchSlot(lvl, quota); if (slot !== null) { quota.set(slot, quota.get(slot) - 1); lvl.target = slot; lvl.diffDelta = Math.abs(lvl.score - slot); made = onAccept(lvl); accepted = true; } }
+        if (!dup) { const slot = matchSlot(lvl.score, slots); if (slot >= 0) { slots[slot].filled = true; lvl.target = slots[slot].target; lvl.diffDelta = Math.abs(lvl.score - lvl.target); made = onAccept(lvl, slot); accepted = true; } }
       }
-      if (!accepted) { tried++; if (tried - lastPaint >= 100) { lastPaint = tried; $b("bProgInfo").textContent = `Vét cạn ±3… ${made}/${count} đạt · đã thử ${tried}`; } }
+      if (!accepted) { tried++; if (tried - lastPaint >= 100) { lastPaint = tried; $b("bProgInfo").textContent = `Vét cạn (điểm chính xác)… ${made}/${count} đạt · đã thử ${tried}`; } }
       if (iters % 5 === 0 || made >= count) await new Promise(r => requestAnimationFrame(r));
     }
   }
@@ -483,12 +646,12 @@ self.onmessage = function (e) {
 
     const seen = new Set();
     let made = 0, mode = "1 luồng", errMsg = "", cancelled = false;
-    // mỗi level KHÍT ±3 -> thêm thư viện + HIỆN CARD NGAY + tăng tiến độ. Trả `made` mới.
-    const onAccept = (lvl) => {
-      lvl.id = startId + made; B.library.push(lvl); B.selection.add(lvl.id); made++;
+    // mỗi level ĐÚNG ĐIỂM + 100% fill -> id = startId + slot (map ĐÚNG vị trí curve, kể cả sinh lệch thứ tự).
+    const onAccept = (lvl, slot) => {
+      lvl.id = startId + slot; lvl.slot = slot; B.library.push(lvl); B.selection.add(lvl.id); made++;
       appendLibCard(lvl);
       $b("bProgBar").style.width = Math.round(made / count * 100) + "%";
-      $b("bProgInfo").textContent = `Vét cạn ±3… ${made}/${count} đạt`;
+      $b("bProgInfo").textContent = `Vét cạn (điểm chính xác)… ${made}/${count} đạt`;
       return made;
     };
     try {
@@ -512,7 +675,7 @@ self.onmessage = function (e) {
       $b("bProgInfo").textContent = errMsg
         ? "✗ Lỗi khi sinh: " + errMsg + " — mở Console (F12) xem chi tiết."
         : (cancelled ? "⛔ Đã hủy · " : `✓ Xong (${mode}) · `)
-          + `${made}/${count} level khít ±3% (fill & độ khó)`
+          + `${made}/${count} level (fill 100% · điểm khó ĐÚNG curve)`
           + (cancelled && made < count ? ` · còn thiếu ${count - made} (bấm Sinh để vét tiếp)` : "");
       setTimeout(() => { $b("bProgWrap").style.display = "none"; }, 1600);
       try { saveLibrary(); renderLibrary(); } catch (e2) { console.error("[Thư viện] lỗi render:", e2); }
@@ -554,6 +717,7 @@ self.onmessage = function (e) {
     if (B.filter !== "all") list = list.filter(l => String(TIER_NUM[l.tier] || 0) === B.filter);
     if (B.sort === "scoreAsc") list.sort((a, b) => a.score - b.score);
     else if (B.sort === "scoreDesc") list.sort((a, b) => b.score - a.score);
+    else list.sort((a, b) => a.id - b.id);   // "index" = theo đường cong (id = vị trí slot trên curve)
     return list;
   }
   function makeLibCard(lvl) {
@@ -601,9 +765,8 @@ self.onmessage = function (e) {
     const tg = $b("bSelToggle"); if (tg) tg.textContent = allSel ? "Bỏ chọn" : "Chọn hết";
   }
   function deleteLevel(id) { B.library = B.library.filter(l => l.id !== id); B.selection.delete(id); saveLibrary(); renderLibrary(); }
-  function selectedLevels() {
-    const order = B.library.slice();
-    return order.filter(l => B.selection.has(l.id));
+  function selectedLevels() {   // theo id tăng dần = đúng thứ tự đường cong (kể cả sinh lệch)
+    return B.library.filter(l => B.selection.has(l.id)).sort((a, b) => a.id - b.id);
   }
 
   // ---------- Chơi level từ thư viện ----------
@@ -612,7 +775,8 @@ self.onmessage = function (e) {
     state.fromLibrary = id;
     state.mode = "play"; state.levelIndex = -1; state.W = lvl.w; state.H = lvl.h;
     const snap = normPieces(lvl.pieces);
-    state.testSnapshot = snap.map(p => ({ dir: p.dir, cells: p.cells.map(c => ({ ...c })), mother: p.mother }));
+    // GIỮ fixedColor để chơi đúng màu game như thumbnail (trước đây bị rớt -> import ra màu khác)
+    state.testSnapshot = snap.map(p => ({ dir: p.dir, cells: p.cells.map(c => ({ ...c })), mother: p.mother, ...(typeof p.fixedColor === "number" ? { fixedColor: p.fixedColor } : {}) }));
     state.pieces = liveFrom(state.testSnapshot);
     state.moves = 0; state.par = lvl.par; state.history = []; state.status = "playing";
     syncModeUI(); render(); refreshDifficulty(state.pieces, state.W, state.H);
@@ -919,13 +1083,7 @@ self.onmessage = function (e) {
   $b("libPrevBtn").addEventListener("click", () => navLibrary(-1));
   $b("libNextBtn").addEventListener("click", () => navLibrary(1));
 
-  // mode button
-  $b("modeBatch").addEventListener("click", () => {
-    state.mode = "batch"; state.fromLibrary = null; state.draft = null;
-    syncModeUI(); renderPreview(); updateCurveInfo(); renderLibrary();
-  });
-
-  // ---------- Kéo-thả ảnh TOÀN CỤC (batch + editor) ----------
+  // ---------- Kéo-thả ảnh TOÀN CỤC (chế độ Hàng loạt) ----------
   // Thả ảnh ở BẤT KỲ đâu khi đang ở chế độ Hàng loạt hoặc Editor — có lớp phủ chỉ dẫn.
   const dropOverlay = document.createElement("div");
   dropOverlay.id = "dropOverlay";
@@ -965,4 +1123,5 @@ self.onmessage = function (e) {
   $b("bScaleVal").textContent = $b("bScale").value;
   setLayoutType("rect");
   updateCurveInfo();
+  state.mode = "batch"; syncModeUI(); renderLibrary();   // mặc định hiện chế độ Hàng loạt
 })();

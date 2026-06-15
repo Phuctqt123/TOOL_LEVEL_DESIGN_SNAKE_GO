@@ -684,8 +684,11 @@ function pieceGeom(cells, dir) {
 }
 
 function drawPiece(svg, piece, opts) {
+  // màu rainbow theo colorIdx (vị trí ổn định trong mảng) để ĐỒNG NHẤT với thumbnail thư viện;
+  // fallback id nếu chưa có colorIdx (rắn nháp/editor).
+  const cidx = (piece.colorIdx != null) ? piece.colorIdx : piece.id;
   const color = (opts && opts.color) || (piece.mother ? "#e8c25a"
-    : ((colorMode === "game" && piece.fixedColor >= 1 && gameColor(piece.fixedColor)) || pieceColor(piece.id)));
+    : ((colorMode === "game" && piece.fixedColor >= 1 && gameColor(piece.fixedColor)) || pieceColor(cidx)));
   const sw = Math.max(2, CELL * (piece.mother ? 0.15 : 0.10));   // rắn mẹ dày hơn (viền)
   const geom = pieceGeom(piece.cells, piece.dir);
   const g = svgEl("g");
@@ -769,7 +772,7 @@ function handleCellClick(x, y) {
 }
 
 // ---------- Play ----------
-function liveFrom(pieces) { return pieces.map(p => ({ id: state.nextId++, dir: p.dir, cells: p.cells.map(c => ({...c})), mother: !!p.mother, ...(typeof p.fixedColor === "number" ? { fixedColor: p.fixedColor } : {}) })); }
+function liveFrom(pieces) { return pieces.map((p, i) => ({ id: state.nextId++, colorIdx: i, dir: p.dir, cells: p.cells.map(c => ({...c})), mother: !!p.mother, ...(typeof p.fixedColor === "number" ? { fixedColor: p.fixedColor } : {}) })); }
 
 function snapshot() { return { pieces: state.pieces.map(p => ({ id:p.id, dir:p.dir, cells:p.cells.map(c=>({...c})) })), moves: state.moves, status: state.status }; }
 
@@ -900,17 +903,13 @@ function enterEditor() {
 }
 
 function syncModeUI() {
-  const edit = state.mode === "edit", batch = state.mode === "batch", play = state.mode === "play";
-  $("modeEdit").classList.toggle("active", edit);
-  const mb = $("modeBatch"); if (mb) mb.classList.toggle("active", batch);
-  // Ẩn/hiện khu chơi-editor vs khu hàng loạt
+  // Chỉ còn 2 chế độ: 'batch' (sinh hàng loạt) và 'play' (chơi 1 level từ thư viện).
+  const batch = state.mode === "batch", play = state.mode === "play";
   const ba = document.querySelector(".board-area"); if (ba) ba.style.display = batch ? "none" : "flex";
   const sd = document.querySelector(".side"); if (sd) sd.style.display = batch ? "none" : "flex";
   const bv = $("batchView"); if (bv) bv.style.display = batch ? "grid" : "none";
-  $("playControls").style.display = (edit || batch) ? "none" : "flex";
-  $("editControls").style.display = edit ? "flex" : "none";
-  $("playHint").style.display = (edit || batch) ? "none" : "block";
-  $("editorCard").style.display = edit ? "block" : "none";
+  const pc = $("playControls"); if (pc) pc.style.display = batch ? "none" : "flex";
+  const ph = $("playHint"); if (ph) ph.style.display = batch ? "none" : "block";
   const lpb = $("libPlayBar"); if (lpb) lpb.style.display = (play && state.fromLibrary != null) ? "flex" : "none";
 }
 
@@ -1188,60 +1187,19 @@ function diffText(d) {
     (b ? ` <span style="color:var(--muted)">(bẫy ${Math.round(b.percScore)}·lượt ${Math.round(b.turnsScore)}·rắn ${Math.round(b.snakeScore)}·tốc ${Math.round(b.rateScore)})</span>` : "");
 }
 
-// ---------- Wire up ----------
+// ---------- Wire up (chỉ còn điều khiển khi CHƠI 1 level từ thư viện) ----------
 $("hintBtn").addEventListener("click", hint);
 $("undoBtn").addEventListener("click", undo);
 $("resetBtn").addEventListener("click", resetLevel);
-$("modeEdit").addEventListener("click", enterEditor);
-$("finishBtn").addEventListener("click", () => { finalizeDraft(); render(); });
-$("testBtn").addEventListener("click", testPlay);
-$("autoParBtn").addEventListener("click", autoPar);
-$("clearBtn").addEventListener("click", clearGrid);
-$("resizeBtn").addEventListener("click", resizeGrid);
-$("genBtn").addEventListener("click", doGenerate);
-$("depBtn").addEventListener("click", toggleDeps);
-$("colorModeBtn").addEventListener("click", toggleColorMode);
-$("shapeFromSnakesBtn").addEventListener("click", shapeFromSnakes);
-$("exportBtn").addEventListener("click", exportJSON);
-$("importBtn").addEventListener("click", importJSON);
-
-// Ảnh -> Map
-$("mapImgBtn").addEventListener("click", () => $("mapImg").click());
-$("mapImg").addEventListener("change", () => { if ($("mapImg").files[0]) loadMaskImage($("mapImg").files[0]); });
-$("mapImgClear").addEventListener("click", clearMaskImage);
-$("mapFromImgBtn").addEventListener("click", doGenerateFromImage);
-$("imgTh").addEventListener("input", () => { $("imgThVal").textContent = $("imgTh").value; refreshMask(); render(); });
-$("imgHarsh").addEventListener("input", () => { $("imgHarshVal").textContent = $("imgHarsh").value; refreshMask(); render(); });
-$("imgFill").addEventListener("input", () => { $("imgFillVal").textContent = $("imgFill").value; });
-$("genTarget").addEventListener("input", () => { $("genTargetVal").textContent = +$("genTarget").value === 0 ? "0" : $("genTarget").value; });
-window.addEventListener("paste", e => {
-  if (state.mode !== "edit") return;
-  const it = [...(e.clipboardData?.items || [])].find(i => i.type.startsWith("image/"));
-  if (it) loadMaskImage(it.getAsFile());
-});
-
-document.querySelectorAll(".tool").forEach(btn => {
-  btn.addEventListener("click", () => {
-    document.querySelectorAll(".tool").forEach(b => b.classList.remove("active"));
-    btn.classList.add("active");
-    state.tool = btn.dataset.tool;
-    // chỉ đổi được hướng đầu khi rắn nháp còn <2 ô; >=2 thì hướng đầu bị ép theo cổ
-    if (state.tool !== "erase" && state.draft && state.draft.cells.length < 2) { state.draft.dir = state.tool; render(); }
-    else if (state.tool === "erase") { finalizeDraft(); render(); }
-  });
-});
 
 document.addEventListener("keydown", e => {
   if (["INPUT","TEXTAREA","SELECT"].includes(e.target.tagName)) return;
-  if (state.mode === "edit") {
-    if (e.key === "Enter") { finalizeDraft(); render(); e.preventDefault(); }
-    return;
-  }
+  if (state.mode !== "play") return;
   if (e.key === "z" || e.key === "Z") { undo(); e.preventDefault(); }
   else if (e.key === "h" || e.key === "H") { hint(); e.preventDefault(); }
   else if (e.key === "r" || e.key === "R") { resetLevel(); e.preventDefault(); }
 });
 window.addEventListener("resize", () => render());
 
-// ---------- Boot ----------
-enterEditor();   // khởi động ở Editor (không còn level mẫu)
+// ---------- Boot ---------- (mặc định vào chế độ Hàng loạt; arrow-batch.js sẽ syncModeUI + render)
+state.mode = "batch";
