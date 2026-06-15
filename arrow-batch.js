@@ -12,7 +12,7 @@
 
   const B = state.batch = {
     layoutType: "rect", W: 20, H: 20, scale: 0.9,
-    maskImg: null, maskTainted: false, paint: new Set(),
+    maskImg: null, maskTainted: false, paint: new Set(), brush: 0, previewCell: 16,
     curve: [{ t: 0, v: 12 }, { t: 1, v: 90 }],
     library: [], selection: new Set(), displayOrder: [],
     sort: "index", filter: "all",
@@ -251,32 +251,53 @@
   function loadCurve() { try { const r = localStorage.getItem(LS_CURVE); if (r) { const c = JSON.parse(r); if (Array.isArray(c) && c.length >= 2) B.curve = c; } } catch (e) {} }
 
   // ---------- Layout preview + paint ----------
+  // Chế độ paint: ô TO (≥16px) + lưới rõ + cuộn; chế độ xem: vừa khung.
+  function previewCellSize() {
+    const m = Math.max(B.W, B.H);
+    return B.layoutType === "paint" ? Math.max(16, Math.min(30, Math.floor(560 / m))) : Math.max(4, Math.floor(440 / m));
+  }
+  function drawCellPv(ctx, x, y, on, cell) {
+    ctx.fillStyle = on ? "rgba(79,159,255,0.34)" : "rgba(255,255,255,0.03)";
+    ctx.fillRect(x * cell, y * cell, cell, cell);
+    ctx.strokeStyle = "rgba(255,255,255,0.10)"; ctx.lineWidth = 1;
+    ctx.strokeRect(x * cell + 0.5, y * cell + 0.5, cell - 1, cell - 1);
+  }
+  function updateLayoutInfo(mask) {
+    const W = B.W, H = B.H, m = mask !== undefined ? mask : currentMask();
+    const area = m ? m.size : W * H, mg = marginCells();
+    $b("bLayoutInfo").textContent = `Bàn ${W}×${H} · vùng đặt rắn ${area} ô · lề ${mg} ô`
+      + (B.layoutType !== "paint" ? ` (${Math.round(B.scale * 100)}%)` : "")
+      + ($b("bMother").checked && mg < 1 ? " · ⚠ lề 0 → rắn mẹ khó ôm, giảm kích thước" : "");
+  }
   function renderPreview() {
-    const cv = $b("bPreview"), W = B.W, H = B.H;
-    const cell = Math.max(4, Math.floor(440 / Math.max(W, H)));
+    const cv = $b("bPreview"), W = B.W, H = B.H, cell = previewCellSize();
+    B.previewCell = cell;
     cv.width = W * cell; cv.height = H * cell;
     cv.classList.toggle("paintable", B.layoutType === "paint");
     const ctx = cv.getContext("2d");
     ctx.clearRect(0, 0, cv.width, cv.height);
     const mask = currentMask();
-    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
-      const on = mask ? mask.has(x + "," + y) : true;
-      ctx.fillStyle = on ? "rgba(79,159,255,0.28)" : "rgba(255,255,255,0.02)";
-      ctx.fillRect(x * cell + 0.5, y * cell + 0.5, cell - 1, cell - 1);
-    }
-    const area = mask ? mask.size : W * H;
-    const mg = marginCells();
-    $b("bLayoutInfo").textContent = `Bàn ${W}×${H} · vùng đặt rắn ${area} ô · lề ${mg} ô`
-      + (B.layoutType !== "paint" ? ` (${Math.round(B.scale * 100)}%)` : "")
-      + ($b("bMother").checked && mg < 1 ? " · ⚠ lề 0 → rắn mẹ khó ôm, giảm kích thước" : "");
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) drawCellPv(ctx, x, y, mask ? mask.has(x + "," + y) : true, cell);
+    updateLayoutInfo(mask);
   }
   function cellFromEvt(cv, e) {
-    const r = cv.getBoundingClientRect();
-    const cell = cv.width / B.W;
+    const r = cv.getBoundingClientRect(), cell = cv.width / B.W;
     const x = Math.floor((e.clientX - r.left) * (cv.width / r.width) / cell);
     const y = Math.floor((e.clientY - r.top) * (cv.height / r.height) / cell);
     if (x < 0 || y < 0 || x >= B.W || y >= B.H) return null;
     return { x, y };
+  }
+  // Tô/xóa 1 vùng cọ quanh (cx,cy); VẼ TỨC THÌ từng ô (không redraw cả canvas -> mượt khi kéo).
+  function applyPaint(cx, cy, val) {
+    const r = B.brush || 0, ctx = $b("bPreview").getContext("2d"), cell = B.previewCell;
+    for (let dy = -r; dy <= r; dy++) for (let dx = -r; dx <= r; dx++) {
+      const x = cx + dx, y = cy + dy;
+      if (x < 0 || y < 0 || x >= B.W || y >= B.H) continue;
+      const k = x + "," + y;
+      if (val) B.paint.add(k); else B.paint.delete(k);
+      drawCellPv(ctx, x, y, val, cell);
+    }
+    updateLayoutInfo(new Set(B.paint));
   }
   let painting = false, paintVal = 1;
   (function wirePaint() {
@@ -284,17 +305,16 @@
     cv.addEventListener("pointerdown", e => {
       if (B.layoutType !== "paint") return;
       const c = cellFromEvt(cv, e); if (!c) return;
-      painting = true; const k = c.x + "," + c.y; paintVal = B.paint.has(k) ? 0 : 1;
-      applyPaint(k, paintVal); cv.setPointerCapture(e.pointerId);
+      painting = true; paintVal = B.paint.has(c.x + "," + c.y) ? 0 : 1;   // bắt đầu từ ô trống=tô, ô đã tô=xóa
+      applyPaint(c.x, c.y, paintVal); cv.setPointerCapture(e.pointerId);
     });
     cv.addEventListener("pointermove", e => {
       if (!painting || B.layoutType !== "paint") return;
-      const c = cellFromEvt(cv, e); if (c) applyPaint(c.x + "," + c.y, paintVal);
+      const c = cellFromEvt(cv, e); if (c) applyPaint(c.x, c.y, paintVal);
     });
     cv.addEventListener("pointerup", () => { painting = false; });
     cv.addEventListener("pointercancel", () => { painting = false; });
   })();
-  function applyPaint(k, val) { if (val) B.paint.add(k); else B.paint.delete(k); renderPreview(); }
 
   // ---------- Sinh 1 level theo target (pure — dùng cả ở main thread & worker) ----------
   // params.fill > 0 -> cố định mật độ (gọi thẳng generateMap); = 0 -> tự động quét fill theo target.
@@ -772,8 +792,7 @@ self.onmessage = function (e) {
     B.layoutType = t;
     $b("bImageRow").style.display = t === "image" ? "block" : "none";
     $b("bPaintRow").style.display = t === "paint" ? "block" : "none";
-    if (t === "paint" && B.paint.size === 0) for (let y = 0; y < B.H; y++) for (let x = 0; x < B.W; x++) B.paint.add(x + "," + y);
-    renderPreview();
+    renderPreview();   // paint bắt đầu TRỐNG (vẽ từ đầu); dùng "Bật hết" nếu muốn full rồi xóa bớt
   }
   function applySize() {
     B.W = clamp(+$b("bW").value, 3, 60); B.H = clamp(+$b("bH").value, 3, 60);
@@ -797,6 +816,7 @@ self.onmessage = function (e) {
   });
   $b("bImgTh").addEventListener("input", () => { $b("bImgThVal").textContent = $b("bImgTh").value; if (B.layoutType === "image") renderPreview(); });
   $b("bImgHarsh").addEventListener("input", () => { $b("bImgHarshVal").textContent = $b("bImgHarsh").value; if (B.layoutType === "image") renderPreview(); });
+  $b("bBrush").addEventListener("change", () => { B.brush = +$b("bBrush").value; });
   $b("bPaintFill").addEventListener("click", () => { B.paint = new Set(); for (let y = 0; y < B.H; y++) for (let x = 0; x < B.W; x++) B.paint.add(x + "," + y); renderPreview(); });
   $b("bPaintClear").addEventListener("click", () => { B.paint = new Set(); renderPreview(); });
   $b("bPaintInvert").addEventListener("click", () => { const n = new Set(); for (let y = 0; y < B.H; y++) for (let x = 0; x < B.W; x++) { const k = x + "," + y; if (!B.paint.has(k)) n.add(k); } B.paint = n; renderPreview(); });

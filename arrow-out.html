@@ -203,8 +203,10 @@
         </div>
 
         <div id="bPaintRow" class="hint" style="display:none; margin-top:8px">
-          Bấm vào ô trong khung xem trước để <b>bật/tắt</b> vùng đặt rắn. Kéo để vẽ nhanh.
-          <div class="row" style="margin-top:6px">
+          Kéo chuột trên khung xem trước để <b>tô vùng đặt rắn</b>. Bắt đầu kéo từ ô <b>TRỐNG</b> = tô; từ ô <b>ĐÃ TÔ</b> = xóa.
+          <div class="row" style="margin-top:6px; align-items:center">
+            <label class="fld" style="flex:0 0 auto">Cọ
+              <select id="bBrush"><option value="0">1×1</option><option value="1">3×3</option><option value="2">5×5</option></select></label>
             <button id="bPaintFill" style="flex:1">Bật hết</button>
             <button id="bPaintClear" style="flex:1">Xóa hết</button>
             <button id="bPaintInvert" style="flex:1">Đảo</button>
