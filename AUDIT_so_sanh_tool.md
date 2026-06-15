@@ -196,7 +196,11 @@ Xếp theo độ ưu tiên / quan trọng để game dùng được:
 
 **Wording**: "Thiên hướng"→**Độ phụ thuộc**, "Độ bọc"→**Nút thắt**, "Độ gắt"→**Ngưỡng phủ ô** (đều thêm tooltip).
 
+### P2 — ĐÃ LÀM (đợt sau)
+- ✅ **Preset heart / star / donut / puppy** (batch layout) — generator procedural + smooth (heart/donut), puppy scale từ bitmap 20×21.
+- ✅ **⬡ Lấy hình dạng từ rắn** (Editor) — lấy đúng ô có rắn làm mask (giữ lỗ), xóa rắn → 🎲 Sinh map fill trên hình đó.
+- ✅ **colorMap "Idea 3"** — import file có màu → nhớ bản đồ màu theo ô; sau khi Sinh map, rắn mới tự nhận màu theo **bình chọn đa số** màu các ô nó nằm (tự bật Màu Game).
+
 ### Còn lại (chưa làm, chờ bạn)
-- **P2**: preset heart/star/donut/puppy; colorMap "Idea 3" (gen lại giữ màu theo ô); "Lấy hình dạng từ snake".
 - Câu hỏi mục 6 còn lại: (2) xác nhận bảng 48 màu đúng game? (5) `Difficulty` trong file ghi điểm của mình — **hiện đang ghi điểm khó (0-100) của mình**, nếu game cần giá trị khác thì báo.
 - **Cần test browser** (mình không mở được): round-trip import↔export với tool anh, import file game thật, các nút mới.

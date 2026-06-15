@@ -1032,8 +1032,10 @@ function doGenerate() {
   finalizeDraft();
   const { diff, wrap, longPref, target, motherN } = genParams();
   const W = state.editW, H = state.editH;
-  const arr = autoGenerate(W, H, diff, wrap, longPref, null, 0, null, target, null);
-  const { motherCount, note } = applyGenerated(arr, W, H, motherN);
+  const mask = (state.maskCells && state.maskCells.size) ? state.maskCells : null;   // hình từ ảnh / lấy-từ-rắn
+  const arr = autoGenerate(W, H, diff, wrap, longPref, mask, 0, null, target, null);
+  const { motherCount, note } = applyGenerated(arr, W, H, motherN, mask);
+  applyColorMap();   // gán màu game cho rắn mới theo bản đồ màu của level đã import (nếu có)
   $("parInput").value = Math.max(1, state.editPieces.length);
   const got = state.editPieces.length;
   const s = solve(state.editPieces, W, H);
@@ -1051,6 +1053,39 @@ function doGenerate() {
 function toggleDeps() { state.showDeps = !state.showDeps; $("depBtn").classList.toggle("active", state.showDeps); renderDeps(); }
 function syncColorBtn() { const b = $("colorModeBtn"); if (b) { b.textContent = colorMode === "game" ? "🎨 Màu: Game" : "🎨 Màu: Cầu vồng"; b.classList.toggle("active", colorMode === "game"); } }
 function toggleColorMode() { colorMode = colorMode === "game" ? "rainbow" : "game"; syncColorBtn(); render(); }
+
+// ---------- colorMap (Idea 3): nhớ màu theo ô của level import, gen lại tô màu tương tự ----------
+function buildColorMap() {
+  const W = state.editW, H = state.editH;
+  const cm = Array.from({ length: H }, () => Array(W).fill(-1)); const freq = {};
+  for (const p of state.editPieces) if (p.fixedColor >= 1) for (const c of p.cells)
+    if (c.y >= 0 && c.y < H && c.x >= 0 && c.x < W) { cm[c.y][c.x] = p.fixedColor; freq[p.fixedColor] = (freq[p.fixedColor] || 0) + 1; }
+  let dom = -1, domN = 0; for (const k in freq) if (freq[k] > domN) { domN = freq[k]; dom = +k; }
+  state.colorMap = cm; state.colorMapDominant = dom; state.colorMapW = W; state.colorMapH = H;
+}
+// Gán fixedColor cho rắn MỚI theo bình chọn đa số màu các ô nó nằm (chỉ khi bản đồ khớp kích thước).
+function applyColorMap() {
+  if (!state.colorMap || state.colorMapW !== state.editW || state.colorMapH !== state.editH) return;
+  const W = state.editW, H = state.editH;
+  for (const p of state.editPieces) {
+    const vote = {};
+    for (const c of p.cells) if (c.y >= 0 && c.y < H && c.x >= 0 && c.x < W) { const col = state.colorMap[c.y][c.x]; if (col >= 1) vote[col] = (vote[col] || 0) + 1; }
+    let best = -1, bestN = 0; for (const k in vote) if (vote[k] > bestN) { bestN = vote[k]; best = +k; }
+    p.fixedColor = best >= 1 ? best : (state.colorMapDominant >= 1 ? state.colorMapDominant : -1);
+  }
+  if (state.editPieces.some(p => p.fixedColor >= 1)) { colorMode = "game"; syncColorBtn(); }
+}
+// ⬡ Lấy hình dạng từ rắn: mask = đúng ô có rắn (giữ lỗ), xóa rắn -> Sinh map fill lại trên hình đó.
+function shapeFromSnakes() {
+  finalizeDraft();
+  if (!state.editPieces.length) { elMsg.className = "msg warn"; elMsg.textContent = "Chưa có rắn nào để lấy hình dạng."; return; }
+  const set = new Set();
+  for (const p of state.editPieces) for (const c of p.cells) if (inBoard(c.x, c.y, state.editW, state.editH)) set.add(c.x + "," + c.y);
+  state.maskImg = null; state.maskCells = set;   // mask 'hình từ rắn' (không phải ảnh); colorMap giữ nguyên
+  state.editPieces = []; state.draft = null;
+  $("parInput").value = 1; refreshDifficulty([], state.editW, state.editH); render();
+  elMsg.className = "msg win"; elMsg.textContent = `⬡ Lấy hình ${set.size} ô (giữ lỗ). Bấm 🎲 Sinh map để sinh rắn mới trên hình này.`;
+}
 
 function buildExportLevel() {
   const grid = Array.from({ length: state.editH }, () => Array.from({ length: state.editW }, () => 0));
@@ -1115,7 +1150,7 @@ function importJSON() {
   state.editPieces = pieces.map(p => ({ id: state.nextId++, dir: p.dir, cells: p.cells.map(c => ({ ...c })),
     ...(typeof p.fixedColor === "number" ? { fixedColor: p.fixedColor } : {}), ...(p.mother ? { mother: true } : {}) }));
   state.draft = null;
-  if (state.editPieces.some(p => p.fixedColor >= 1)) { colorMode = "game"; syncColorBtn(); }   // file có màu game -> bật chế độ Màu Game
+  if (state.editPieces.some(p => p.fixedColor >= 1)) { colorMode = "game"; syncColorBtn(); buildColorMap(); }   // file có màu -> bật Màu Game + nhớ bản đồ màu
   $("gridW").value = w; $("gridH").value = h; $("parInput").value = state.editPieces.length;
   elMsg.className = "msg win"; elMsg.textContent = "✓ Đã import (" + fmt + ")"; render();
 }
@@ -1168,6 +1203,7 @@ $("resizeBtn").addEventListener("click", resizeGrid);
 $("genBtn").addEventListener("click", doGenerate);
 $("depBtn").addEventListener("click", toggleDeps);
 $("colorModeBtn").addEventListener("click", toggleColorMode);
+$("shapeFromSnakesBtn").addEventListener("click", shapeFromSnakes);
 $("exportBtn").addEventListener("click", exportJSON);
 $("importBtn").addEventListener("click", importJSON);
 

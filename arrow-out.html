@@ -104,6 +104,9 @@
         <button id="depBtn" class="toggle" style="flex:1">🔗 Phụ thuộc</button>
         <button id="colorModeBtn" style="flex:1" title="Đổi cách tô màu rắn: Cầu vồng (mỗi rắn 1 màu) ⇄ Game (theo 48 màu ColorType từ file)">🎨 Màu: Cầu vồng</button>
       </div>
+      <div class="row">
+        <button id="shapeFromSnakesBtn" style="flex:1" title="Lấy ĐÚNG các ô đang có rắn làm vùng đặt rắn (giữ nguyên lỗ trống), xóa rắn cũ. Sau đó bấm 🎲 Sinh map để sinh rắn mới chỉ trên hình đó. Hữu ích sau khi Import 1 level game (file game không lưu hình)." >⬡ Lấy hình dạng từ rắn</button>
+      </div>
       <div class="row"><div class="hint" id="genInfo" style="flex:1"></div></div>
 
       <div class="row" style="margin-top:14px; border-top:1px solid var(--line); padding-top:12px">
@@ -163,7 +166,11 @@
             <select id="bLayoutType">
               <option value="rect">Vuông / chữ nhật</option>
               <option value="circle">Tròn / elip</option>
-              <option value="diamond">Thoi (diamond)</option>
+              <option value="diamond">◆ Thoi (diamond)</option>
+              <option value="heart">♥ Tim (heart)</option>
+              <option value="star">★ Sao (star)</option>
+              <option value="donut">◎ Vòng (donut)</option>
+              <option value="puppy">🐶 Cún (puppy)</option>
               <option value="image">Từ ảnh (silhouette)</option>
               <option value="paint">Tự vẽ (paint ô)</option>
             </select>

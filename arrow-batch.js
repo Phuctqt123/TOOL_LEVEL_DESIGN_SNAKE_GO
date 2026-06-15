@@ -45,6 +45,68 @@
     }
     return set;
   }
+  // ---------- Preset hình đặc biệt (heart/star/donut/puppy) — port từ tool anh ----------
+  const PUPPY_ROWS = ["00111100000111100000","01111111111111111000","11111111111111111100","11111111111111111100","11111111111111111100","11111111111111111100","11111111111111111100","00111111111111100000","00111111111111100000","00111111111111100000","00011111111111100000","00001111111111101100","00001111111111111110","00001111111111111111","00001111111111111111","00001111111111111111","00000111111111111111","00000111111111111111","00001111111111111110","00011111111111111100","00011111001111111111"];
+  function shapeGrid(t, W, H) {
+    const g = Array.from({ length: H }, () => Array(W).fill(false));
+    if (t === "heart") {
+      const circR = W * 0.28, lx = W * 0.26, rx = W * 0.74, cy = H * 0.28, bottomY = H * 0.96, apexY = cy + circR * 0.35;
+      for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+        const px = x + 0.5, py = y + 0.5;
+        const inL = (px - lx) ** 2 + (py - cy) ** 2 <= circR * circR, inR = (px - rx) ** 2 + (py - cy) ** 2 <= circR * circR;
+        let inBody = false;
+        if (py >= apexY && py <= bottomY) {
+          const tp = Math.pow((py - apexY) / (bottomY - apexY), 1.4);
+          const le = (lx - circR * 0.95) * (1 - tp) + (W / 2) * tp, re = (rx + circR * 0.95) * (1 - tp) + (W / 2) * tp;
+          inBody = px >= le && px <= re;
+        }
+        if (inL || inR || inBody) g[y][x] = true;
+      }
+    } else if (t === "star") {
+      const innerRatio = 0.42, vraw = [];
+      for (let i = 0; i < 5; i++) {
+        const aO = (-Math.PI / 2) + i * (Math.PI * 2 / 5); vraw.push([Math.cos(aO), Math.sin(aO)]);
+        const aI = aO + Math.PI / 5; vraw.push([Math.cos(aI) * innerRatio, Math.sin(aI) * innerRatio]);
+      }
+      const xs = vraw.map(v => v[0]), ys = vraw.map(v => v[1]);
+      const minX = Math.min(...xs), maxX = Math.max(...xs), minY = Math.min(...ys), maxY = Math.max(...ys);
+      const sx = (W - 1) / (maxX - minX), sy = (H - 1) / (maxY - minY);
+      const verts = vraw.map(([x, y]) => [(x - minX) * sx, (y - minY) * sy]);
+      const inStar = (px, py) => { let ins = false; for (let i = 0, j = verts.length - 1; i < verts.length; j = i++) { const xi = verts[i][0], yi = verts[i][1], xj = verts[j][0], yj = verts[j][1]; if (((yi > py) !== (yj > py)) && (px < (xj - xi) * (py - yi) / (yj - yi) + xi)) ins = !ins; } return ins; };
+      for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) if (inStar(x, y)) g[y][x] = true;
+    } else if (t === "donut") {
+      const cx = (W - 1) / 2, cy = (H - 1) / 2, oR = Math.min(W, H) / 2 - 0.5, iR = oR * 0.40;
+      for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) { const d = Math.hypot(x - cx, y - cy); if (d <= oR && d >= iR) g[y][x] = true; }
+    } else if (t === "puppy") {
+      const PR = PUPPY_ROWS.length, PC = PUPPY_ROWS[0].length;   // 21x20, scale nearest-neighbor về W×H
+      for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+        const py = Math.min(PR - 1, Math.floor(y / H * PR)), px = Math.min(PC - 1, Math.floor(x / W * PC));
+        if (PUPPY_ROWS[py][px] === "1") g[y][x] = true;
+      }
+    }
+    return g;
+  }
+  function smoothGrid(g, W, H, passes) {   // bỏ ngạnh nhọn (nối ≤1 phía), lấp khe sâu (≥3 phía)
+    const n4 = (m, x, y) => { let c = 0; for (const [dx, dy] of [[0, -1], [0, 1], [-1, 0], [1, 0]]) { const nx = x + dx, ny = y + dy; if (nx >= 0 && nx < W && ny >= 0 && ny < H && m[ny][nx]) c++; } return c; };
+    let m = g.map(r => [...r]);
+    for (let p = 0; p < passes; p++) {
+      const nm = m.map(r => [...r]); let ch = false;
+      for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+        if (!m[y][x] && n4(m, x, y) >= 3) { nm[y][x] = true; ch = true; }
+        if (m[y][x] && n4(m, x, y) <= 1) { nm[y][x] = false; ch = true; }
+      }
+      m = nm; if (!ch) break;
+    }
+    return m;
+  }
+  function maskShape(t, W, H) {
+    let g = shapeGrid(t, W, H);
+    if (t === "heart" || t === "donut") g = smoothGrid(g, W, H, 4);
+    const set = new Set();
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) if (g[y][x]) set.add(x + "," + y);
+    return set;
+  }
+
   // Co một mask bất kỳ quanh tâm bàn (dùng cho ảnh / tự vẽ). s<1 -> nhỏ lại, chừa lề.
   function scaleMask(mask, W, H, s) {
     if (s >= 0.999) return mask;
@@ -73,6 +135,7 @@
       } catch (e) { B.maskTainted = true; return new Set(); }   // ảnh web bị CORS chặn đọc pixel
     }
     if (t === "paint") return scaleMask(new Set(B.paint), W, H, s);
+    if (t === "heart" || t === "star" || t === "donut" || t === "puppy") return scaleMask(maskShape(t, W, H), W, H, s);
     return null;
   }
 
