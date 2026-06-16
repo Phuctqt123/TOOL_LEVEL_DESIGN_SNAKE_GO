@@ -290,15 +290,21 @@ function computeDifficulty(pieces, w, h) {
   if (!pieces.length) return { score: 0, tier: "—", emoji: "" };
   const a = analyzeSolve(pieces, w, h);
   if (a.stuck > 0) return { score: 0, tier: "KẸT", emoji: "✕", stuck: a.stuck, breakdown: null };
-  const rates = a.turnData.map(d => d.rate);
+  // Số cách đi mỗi lượt (TRUNG BÌNH): ít rắn thoát được/lượt -> bị siết -> KHÓ CHƠI. Thành phần #2.
+  const rates = a.turnData.map(d => d.rate);   // mỗi lượt: % rắn còn lại thoát được (chuẩn hóa theo cỡ bàn)
   const avgRate = rates.length ? rates.reduce((x, y) => x + y, 0) / rates.length : 0;
-  const rateScore  = Math.max(0, Math.min(100, (100 - avgRate) * 1.1));
+  const moveScore  = Math.max(0, Math.min(100, (100 - avgRate) * 1.1));
   const turnsScore = Math.max(0, Math.min(100, Math.log2(Math.max(1, a.turns)) / Math.log2(50) * 100));
   const snakeScore = Math.max(0, Math.min(100, Math.log2(Math.max(1, a.snakes)) / Math.log2(140) * 100));
   const percScore  = percDynamic(pieces, w, h);
-  const score = Math.round(0.10 * turnsScore + 0.20 * snakeScore + 0.10 * rateScore + 0.60 * percScore);
+  // Tổng có trọng số: bẫy thị giác 0.50 (#1) · số cách đi/lượt 0.30 (#2) · số rắn 0.10 · số lượt 0.10
+  const raw = 0.50 * percScore + 0.30 * moveScore + 0.10 * snakeScore + 0.10 * turnsScore;
+  // TRẦN KHẢ-CHƠI: map mỗi lượt đi được NHIỀU (moveScore thấp) thì dù nhìn rối vẫn DỄ chơi -> kéo điểm xuống.
+  // -> điểm CAO buộc phải bị siết nước đi, không thể "khó giả" chỉ nhờ bẫy thị giác.
+  const playable = 0.6 + 0.4 * (moveScore / 100);   // 0.6 (lỏng) .. 1.0 (siết chặt)
+  const score = Math.round(raw * playable);
   const [, tier, emoji] = DIFF_TIERS.find(t => score < t[0]);
-  return { score, tier, emoji, breakdown: { turnsScore, snakeScore, rateScore, percScore } };
+  return { score, tier, emoji, breakdown: { turnsScore, snakeScore, moveScore, percScore } };
 }
 
 // ---------- Generator ----------
@@ -1184,7 +1190,7 @@ function diffText(d) {
   if (d.tier === "KẸT") return "khó —";
   const b = d.breakdown;
   return `khó <b>${d.score}</b> ${d.emoji} ${d.tier}` +
-    (b ? ` <span style="color:var(--muted)">(bẫy ${Math.round(b.percScore)}·lượt ${Math.round(b.turnsScore)}·rắn ${Math.round(b.snakeScore)}·tốc ${Math.round(b.rateScore)})</span>` : "");
+    (b ? ` <span style="color:var(--muted)">(bẫy ${Math.round(b.percScore)}·đi/lượt ${Math.round(b.moveScore)}·rắn ${Math.round(b.snakeScore)}·lượt ${Math.round(b.turnsScore)})</span>` : "");
 }
 
 // ---------- Wire up (chỉ còn điều khiển khi CHƠI 1 level từ thư viện) ----------

@@ -16,7 +16,7 @@
     curve: [{ t: 0, v: 12 }, { t: 1, v: 90 }],
     library: [], selection: new Set(), displayOrder: [],
     sort: "index", filter: "all",
-    fillTarget: 100, minL: 2, maxL: 0,   // fill 50–100 (=100 ép kín); minL/maxL trần-sàn độ dài rắn (maxL 0 = auto/không giới hạn)
+    fillTarget: 100, minL: 2, maxL: 0,   // fill 50–100 (=100 ép kín); minL/maxL độ dài rắn (maxL 0 = auto)
     generating: false, cancel: false, dragIdx: -1,
     workerURL: null, activeWorkers: null, cancelParallel: null,
   };
@@ -322,7 +322,8 @@
   // Xây TĂNG DẦN: mỗi lần đặt rắn đều kiểm tra CẢ BÀN vẫn giải được (isSolvable nhanh, Int32 phẳng)
   // -> KHÔNG bao giờ tạo board KẸT -> nhanh + fill cao + luôn giải được. Trả [{id,dir,cells}] hoặc null.
   // placeGuard cho phép rắn TẠM bị chặn (miễn tồn tại thứ tự gỡ hết) -> chuỗi phụ thuộc = độ khó.
-  function genFull(W, H, mask, params) {
+  function genFull(W, H, mask, params, target) {
+    const tightBias = (target && target > 0) ? Math.max(0, Math.min(0.95, target / 100)) : 0.5;   // target cao -> siết mạnh
     const inMask = (x, y) => x >= 0 && x < W && y >= 0 && y < H && (!mask || mask.has(x + "," + y));
     const DIRN = [{ dx: 0, dy: -1 }, { dx: 1, dy: 0 }, { dx: 0, dy: 1 }, { dx: -1, dy: 0 }];
     const board = [];
@@ -377,7 +378,24 @@
       path.forEach(c => board[c.y][c.x] = 0);
       return path;
     }
-    function placeGuard(body) {   // thử orient & rút ngắn sao cho CẢ TẬP vẫn solvable
+    // Đầu rắn (cells[0], hướng dir) hiện CÓ bị rắn khác chặn không (siết)? Tia tới rìa gặp rắn khác = bị chặn.
+    function headBlocked(cells, dir) {
+      const d = DELTA[dir]; let x = cells[0].x + d.x, y = cells[0].y + d.y;
+      while (x >= 0 && y >= 0 && x < W && y < H) { const v = board[y][x]; if (v > 0) return true; x += d.x; y += d.y; }
+      return false;
+    }
+    function placeGuard(body, preferBlocked) {   // thử orient & rút ngắn sao cho CẢ TẬP vẫn solvable
+      // SIẾT: nếu muốn rắn bị chặn (phụ thuộc dài), thử bản DÀI NHẤT 2 hướng mà đầu đang bị chặn trước.
+      if (preferBlocked) {
+        for (const cells of [body, body.slice().reverse()]) {
+          if (cells.length < 2) continue;
+          const dir = dirOf(cells); if (!dir) continue;
+          const id = sid; for (const c of cells) board[c.y][c.x] = id;
+          snakes.push({ id, dir, cells: cells.map(c => ({ x: c.x, y: c.y })) });
+          if (isSolvable() && headBlocked(cells, dir)) { sid++; return true; }
+          snakes.pop(); for (const c of cells) board[c.y][c.x] = 0;
+        }
+      }
       for (let L = body.length; L >= lo; L--) {
         for (const cells of [body.slice(0, L), body.slice(0, L).reverse()]) {
           if (cells.length < 2) continue;
@@ -438,7 +456,7 @@
         else primary = DIRN[rint(4)];
       } else { seed = empties[rint(empties.length)]; primary = DIRN[rint(4)]; }
       const body = grow(seed.x, seed.y, primary, targets[ti]);
-      if (body.length < 2 || !placeGuard(body)) skip.add(seed.x + "," + seed.y);
+      if (body.length < 2 || !placeGuard(body, Math.random() < tightBias)) skip.add(seed.x + "," + seed.y);
     }
     // PHASE 2: lấp khe bằng rắn ngắn
     let guard = 0; const maxGuard = W * H * 3;
@@ -448,7 +466,7 @@
       if (!empties.length) break;
       const seed = empties[0], tlen = Math.max(lo, Math.min(maxL, lo + rint(4)));
       const body = grow(seed.x, seed.y, DIRN[rint(4)], tlen);
-      if (body.length < 2 || !placeGuard(body)) skip.add(seed.x + "," + seed.y);
+      if (body.length < 2 || !placeGuard(body, Math.random() < tightBias)) skip.add(seed.x + "," + seed.y);
     }
     // FILL BOOST B1: kéo dài đuôi rắn (giữ solvable, không vụn)
     { let changed = true, rounds = 0;
@@ -481,7 +499,7 @@
     const wantFill = Math.round((params && params.fill > 0 ? params.fill : 1) * 100);   // % fill mục tiêu
     let bestArr = null, bestDd = Infinity;
     for (let r = 0; r < MAX; r++) {
-      const arr = genFull(W, H, mask, params);
+      const arr = genFull(W, H, mask, params, target);   // target -> ép siết tỉ lệ theo độ khó muốn
       if (!arr || arr.length < 2) continue;
       let cov = 0; for (const p of arr) cov += p.cells.length;   // rắn chỉ nằm trong mask -> cov = ô đã phủ
       const fillReal = fullArea ? Math.round(cov / fullArea * 100) : 0;
