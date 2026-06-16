@@ -378,23 +378,39 @@
       path.forEach(c => board[c.y][c.x] = 0);
       return path;
     }
-    // Đầu rắn (cells[0], hướng dir) hiện CÓ bị rắn khác chặn không (siết)? Tia tới rìa gặp rắn khác = bị chặn.
-    function headBlocked(cells, dir) {
-      const d = DELTA[dir]; let x = cells[0].x + d.x, y = cells[0].y + d.y;
-      while (x >= 0 && y >= 0 && x < W && y < H) { const v = board[y][x]; if (v > 0) return true; x += d.x; y += d.y; }
-      return false;
+    // Chất lượng PHỤ THUỘC của đầu rắn (cells[0], hướng dir): -1 nếu thoát thẳng ra rìa (không phụ thuộc);
+    // else = perp*1000 + dist. perp=1 nếu rắn chặn cắt VUÔNG GÓC tia thoát (thân nó theo trục vuông góc tại ô chạm);
+    // dist = số ô trống tới chỗ chạm (XA hơn = phụ thuộc tầm xa, ưu tiên). -> vuông góc + xa được ưu tiên.
+    function depQuality(cells, dir, id) {
+      const d = DELTA[dir], px = -d.y, py = d.x;   // (px,py) = trục vuông góc với hướng thoát
+      let x = cells[0].x + d.x, y = cells[0].y + d.y, dist = 0;
+      while (x >= 0 && y >= 0 && x < W && y < H) {
+        const v = board[y][x];
+        if (v > 0) {
+          if (v === id) return -1;   // tự chặn (không xảy ra nếu solvable)
+          const a1 = (x + px >= 0 && x + px < W && y + py >= 0 && y + py < H) ? board[y + py][x + px] : 0;
+          const a2 = (x - px >= 0 && x - px < W && y - py >= 0 && y - py < H) ? board[y - py][x - px] : 0;
+          const perp = (a1 === v || a2 === v) ? 1 : 0;   // rắn chặn có thân theo trục vuông góc -> cắt ngang
+          return perp * 1000 + dist;
+        }
+        dist++; x += d.x; y += d.y;
+      }
+      return -1;   // tới rìa thông -> thoát ngay, không phụ thuộc
     }
     function placeGuard(body, preferBlocked) {   // thử orient & rút ngắn sao cho CẢ TẬP vẫn solvable
-      // SIẾT: nếu muốn rắn bị chặn (phụ thuộc dài), thử bản DÀI NHẤT 2 hướng mà đầu đang bị chặn trước.
+      // SIẾT: ưu tiên rắn có phụ thuộc TỐT NHẤT (vuông góc + xa) trong 2 hướng bản dài nhất, vẫn solvable.
       if (preferBlocked) {
+        let best = null, bestScore = 0;   // chỉ nhận khi có phụ thuộc thật (dq >= 0)
         for (const cells of [body, body.slice().reverse()]) {
           if (cells.length < 2) continue;
           const dir = dirOf(cells); if (!dir) continue;
           const id = sid; for (const c of cells) board[c.y][c.x] = id;
           snakes.push({ id, dir, cells: cells.map(c => ({ x: c.x, y: c.y })) });
-          if (isSolvable() && headBlocked(cells, dir)) { sid++; return true; }
+          const dq = isSolvable() ? depQuality(cells, dir, id) : -1;
           snakes.pop(); for (const c of cells) board[c.y][c.x] = 0;
+          if (dq >= 0 && (!best || dq > bestScore)) { bestScore = dq; best = { cells: cells.map(c => ({ x: c.x, y: c.y })), dir }; }
         }
+        if (best) { const id = sid; for (const c of best.cells) board[c.y][c.x] = id; snakes.push({ id, dir: best.dir, cells: best.cells }); sid++; return true; }
       }
       for (let L = body.length; L >= lo; L--) {
         for (const cells of [body.slice(0, L), body.slice(0, L).reverse()]) {

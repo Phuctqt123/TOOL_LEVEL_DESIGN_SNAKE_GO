@@ -251,39 +251,66 @@ function percRisk(pieces, w, h) {
       dAlong++; x += d.x; y += d.y;
     }
     if (!blocker) continue;                 // thoát được -> không rủi ro
-    let dPerp = 999;
+    let dPerp = 999, blockerLen = sn.cells.length;
     if (blocker.self) dPerp = d.x !== 0 ? Math.abs(blocker.y - head.y) : Math.abs(blocker.x - head.x);
     else {
       const b = byId.get(blocker.id);
-      if (b) for (const c of b.cells) { const perp = d.x !== 0 ? Math.abs(c.y - head.y) : Math.abs(c.x - head.x); if (perp < dPerp) dPerp = perp; }
+      if (b) { blockerLen = b.cells.length; for (const c of b.cells) { const perp = d.x !== 0 ? Math.abs(c.y - head.y) : Math.abs(c.x - head.x); if (perp < dPerp) dPerp = perp; } }
       else dPerp = 0;
     }
     const dCap = Math.min(dAlong, 15);
     const angle = Math.atan2(dPerp, dCap) * 180 / Math.PI;
     const confusion = Math.max(0, 1 - angle / 30);
-    total += Math.min(confusion * dCap / 10, 0.5);
+    // BẪY MẠNH HƠN khi con LỚN bị con NHỎ chặn ở XA: sizeBoost chỉ khuếch đại (≥1), dCap đã mã hóa khoảng cách.
+    const sizeBoost = Math.max(1, Math.min(3, sn.cells.length / Math.max(1, blockerLen)));
+    total += Math.min(confusion * dCap / 10 * sizeBoost, 1.0);
   }
   return total / pieces.length;
 }
-// Perceptual ĐỘNG: replay solver, lấy sustained top-30% × (1 + 0.5·freq).
+// Replay solver, trả 3 tín hiệu theo lượt (0..100):
+//  perc   = bẫy "tưởng đi được mà bị chặn" (sustained top-30% × (1+0.5·freq))
+//  hidden = bẫy "tưởng KHÔNG đi được mà LẠI đi được" (tia thoát luồn sát rắn khác = nhìn như bị chặn)
+//  xa     = quãng đường rắn phải chạy để VA TRÚNG con chặn nó (phụ thuộc tầm xa -> khó nhìn ra)
 function percDynamic(pieces, w, h) {
-  if (!pieces.length) return 0;
+  if (!pieces.length) return { perc: 0, hidden: 0, xa: 0 };
   const MIN_REM = 3, RISKY = 0.10, K = 230, FREQ_BOOST = 0.5, TOP_FRAC = 0.30;
-  let rest = pieces.slice(); const series = []; let t = 0;
+  let rest = pieces.slice(); const series = [], hSeries = [], dSeries = []; let t = 0;
   while (rest.length && t < 300) {
+    const occ = new Map(); for (const p of rest) for (const c of p.cells) occ.set(c.x + "," + c.y, p.id);
     if (rest.length >= MIN_REM) series.push(percRisk(rest, w, h));
-    const mv = movableList(rest, w, h);
+    const mv = []; let hidSum = 0, hidCnt = 0, depSum = 0, depCnt = 0;
+    for (const p of rest) {
+      const d = DELTA[p.dir], head = p.cells[0], px = -d.y, py = d.x, id = p.id;
+      let x = head.x + d.x, y = head.y + d.y, ok = true, nearMiss = 0, dist = 0;
+      while (x >= 0 && y >= 0 && x < w && y < h) {
+        if (occ.has(x + "," + y)) { ok = false; break; }
+        const s1 = occ.get((x + px) + "," + (y + py)), s2 = occ.get((x - px) + "," + (y - py));   // ô sát BÊN tia
+        if ((s1 !== undefined && s1 !== id) || (s2 !== undefined && s2 !== id)) nearMiss++;          // luồn sát rắn khác
+        dist++; x += d.x; y += d.y;
+      }
+      if (rest.length >= MIN_REM) {
+        if (ok) { hidSum += Math.min(1, nearMiss / 3); hidCnt++; }     // thoát được nhưng luồn sát: tưởng-chặn-mà-đi
+        else { depSum += Math.min(dist, 15) / 15; depCnt++; }           // bị chặn: quãng đường tới con chặn (XA = khó)
+      }
+      if (ok) mv.push(p);
+    }
+    if (hidCnt) hSeries.push(hidSum / hidCnt);
+    if (depCnt) dSeries.push(depSum / depCnt);
     if (!mv.length) break;
     t++;
     const ids = new Set(mv.map(p => p.id));
     rest = rest.filter(p => !ids.has(p.id));
   }
-  if (!series.length) return 0;
-  const freq = series.filter(r => r >= RISKY).length / series.length;
-  const sorted = [...series].sort((a, b) => b - a);
-  const topN = Math.max(1, Math.ceil(series.length * TOP_FRAC));
-  const sustained = sorted.slice(0, topN).reduce((a, b) => a + b, 0) / topN;
-  return Math.min(100, sustained * K * (1 + FREQ_BOOST * freq));
+  const avg = arr => arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : 0;
+  let perc = 0;
+  if (series.length) {
+    const freq = series.filter(r => r >= RISKY).length / series.length;
+    const sorted = [...series].sort((a, b) => b - a);
+    const topN = Math.max(1, Math.ceil(series.length * TOP_FRAC));
+    const sustained = sorted.slice(0, topN).reduce((a, b) => a + b, 0) / topN;
+    perc = Math.min(100, sustained * K * (1 + FREQ_BOOST * freq));
+  }
+  return { perc, hidden: avg(hSeries) * 100, xa: avg(dSeries) * 100 };
 }
 const DIFF_TIERS = [[20,"Rất dễ","★"],[40,"Dễ","★★"],[60,"Vừa","★★★"],[80,"Khó","★★★★"],[101,"Siêu khó","★★★★★"]];
 function computeDifficulty(pieces, w, h) {
@@ -293,18 +320,19 @@ function computeDifficulty(pieces, w, h) {
   // Số cách đi mỗi lượt (TRUNG BÌNH): ít rắn thoát được/lượt -> bị siết -> KHÓ CHƠI. Thành phần #2.
   const rates = a.turnData.map(d => d.rate);   // mỗi lượt: % rắn còn lại thoát được (chuẩn hóa theo cỡ bàn)
   const avgRate = rates.length ? rates.reduce((x, y) => x + y, 0) / rates.length : 0;
-  const moveScore  = Math.max(0, Math.min(100, (100 - avgRate) * 1.1));
-  const turnsScore = Math.max(0, Math.min(100, Math.log2(Math.max(1, a.turns)) / Math.log2(50) * 100));
+  const moveRaw    = Math.max(0, Math.min(100, (100 - avgRate) * 1.1));
+  const moveScore  = Math.round(moveRaw * moveRaw / 100);   // BÌNH PHƯƠNG: siết mạnh (lỏng -> rớt sâu)
   const snakeScore = Math.max(0, Math.min(100, Math.log2(Math.max(1, a.snakes)) / Math.log2(140) * 100));
-  const percScore  = percDynamic(pieces, w, h);
-  // Tổng có trọng số: bẫy thị giác 0.50 (#1) · số cách đi/lượt 0.30 (#2) · số rắn 0.10 · số lượt 0.10
-  const raw = 0.50 * percScore + 0.30 * moveScore + 0.10 * snakeScore + 0.10 * turnsScore;
+  const sig = percDynamic(pieces, w, h);
+  const percScore = sig.perc, hiddenScore = sig.hidden, xaScore = sig.xa;
+  // Trọng số: bẫy "đi-được-mà-bị-chặn" 0.30 = ẩn "tưởng-chặn-mà-đi-được" 0.30 · số cách đi/lượt 0.20
+  //          · phụ-thuộc-XA (quãng đường tới con chặn) 0.10 · số rắn 0.10
+  const raw = 0.30 * percScore + 0.30 * hiddenScore + 0.20 * moveScore + 0.10 * xaScore + 0.10 * snakeScore;
   // TRẦN KHẢ-CHƠI: map mỗi lượt đi được NHIỀU (moveScore thấp) thì dù nhìn rối vẫn DỄ chơi -> kéo điểm xuống.
-  // -> điểm CAO buộc phải bị siết nước đi, không thể "khó giả" chỉ nhờ bẫy thị giác.
   const playable = 0.6 + 0.4 * (moveScore / 100);   // 0.6 (lỏng) .. 1.0 (siết chặt)
   const score = Math.round(raw * playable);
   const [, tier, emoji] = DIFF_TIERS.find(t => score < t[0]);
-  return { score, tier, emoji, breakdown: { turnsScore, snakeScore, moveScore, percScore } };
+  return { score, tier, emoji, breakdown: { snakeScore, moveScore, percScore, hiddenScore, xaScore } };
 }
 
 // ---------- Generator ----------
@@ -1190,7 +1218,7 @@ function diffText(d) {
   if (d.tier === "KẸT") return "khó —";
   const b = d.breakdown;
   return `khó <b>${d.score}</b> ${d.emoji} ${d.tier}` +
-    (b ? ` <span style="color:var(--muted)">(bẫy ${Math.round(b.percScore)}·đi/lượt ${Math.round(b.moveScore)}·rắn ${Math.round(b.snakeScore)}·lượt ${Math.round(b.turnsScore)})</span>` : "");
+    (b ? ` <span style="color:var(--muted)">(bẫy ${Math.round(b.percScore)}·ẩn ${Math.round(b.hiddenScore)}·đi/lượt ${Math.round(b.moveScore)}·xa ${Math.round(b.xaScore)}·rắn ${Math.round(b.snakeScore)})</span>` : "");
 }
 
 // ---------- Wire up (chỉ còn điều khiển khi CHƠI 1 level từ thư viện) ----------
