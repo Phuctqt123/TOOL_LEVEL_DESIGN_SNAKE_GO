@@ -876,8 +876,8 @@ self.onmessage = function (e) {
     B.paint = autoFillHoles(B.paint, B.W, B.H);   // gốc chưa fill hết -> tự lấp các ô 0 bị 1 bao quanh
     floodZones(cm, B.paint, B.W, B.H);            // ô chưa màu (lỗ/đệm trong) -> gán về vùng màu gần nhất
     B.layoutType = "paint"; $b("bLayoutType").value = "paint"; setLayoutType("paint");
-    // fill kín + độ khó [0–100] (sao cũng được) + bỏ "Rắn mẹ"
-    B.fillTarget = 100; $b("bFill").value = 100; $b("bFillVal").textContent = "100";
+    // fill mặc định 97% + độ khó [0–100] (sao cũng được) + bỏ "Rắn mẹ"
+    B.fillTarget = 97; $b("bFill").value = 97; $b("bFillVal").textContent = "97";
     $b("bMother").checked = false;
     B.diffMode = "range"; $b("bDiffMode").value = "range";
     B.diffMin = 0; B.diffMax = 100; $b("bDiffMin").value = 0; $b("bDiffMax").value = 100; syncDiffMode();
