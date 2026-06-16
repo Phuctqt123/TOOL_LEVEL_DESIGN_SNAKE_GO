@@ -139,7 +139,15 @@
 
       <div class="card">
         <h2>3 · Tham số sinh</h2>
-        <p class="hint" style="margin:0 0 8px">Engine lấp đầy có bảo vệ solvable → nhanh, luôn giải được. Chỉ giữ map <b>fill 100%</b> và điểm khó <b>ĐÚNG BẰNG</b> điểm trên đường cong (vét cạn, lặp vô hạn tới khi đủ — bấm Hủy nếu một mức không ra).</p>
+        <p class="hint" style="margin:0 0 8px">Engine lấp đầy có bảo vệ solvable → nhanh, luôn giải được. Chỉ giữ map khớp <b>fill mục tiêu</b> (±3%, =100% thì ép kín) và điểm khó <b>ĐÚNG BẰNG</b> điểm trên đường cong (vét cạn, lặp tới khi đủ — bấm Hủy nếu một mức không ra). Hạ fill để chạm các mức khó thấp hơn.</p>
+        <div class="row" style="margin-top:4px">
+          <label class="fld" style="flex:1" title="Tỉ lệ ô vùng chơi bị rắn phủ. 100 = ép kín tuyệt đối; thấp hơn = thưa hơn (map dễ hơn). Nhận khi fill thực trong ±3% mục tiêu.">Độ lấp đầy (fill): <b id="bFillVal">100</b>%
+            <input type="range" id="bFill" min="50" max="100" value="100" /></label>
+        </div>
+        <div class="row" style="margin-top:4px; align-items:flex-end">
+          <label class="fld" title="Độ dài TỐI THIỂU của rắn ở các pha đặt chính. Bước lấp cuối (đạt fill) vẫn có thể ngắn hơn.">Dài tối thiểu <input type="number" id="bMinL" min="2" max="99" value="2" style="width:70px" /></label>
+          <label class="fld" title="Trần độ dài rắn. 0 = tự động / KHÔNG giới hạn cứng. Nhập số lớn = gần như không giới hạn (rắn dài tùy ý trong bàn).">Dài tối đa <input type="number" id="bMaxL" min="0" max="9999" value="0" style="width:70px" /></label>
+        </div>
         <div class="row" style="align-items:center">
           <label class="chk" title="Thêm 1 viền rắn mẹ ôm sát hình"><input type="checkbox" id="bMother" /> Rắn mẹ (viền ôm)</label>
         </div>

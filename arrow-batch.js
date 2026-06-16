@@ -16,6 +16,7 @@
     curve: [{ t: 0, v: 12 }, { t: 1, v: 90 }],
     library: [], selection: new Set(), displayOrder: [],
     sort: "index", filter: "all",
+    fillTarget: 100, minL: 2, maxL: 0,   // fill 50–100 (=100 ép kín); minL/maxL trần-sàn độ dài rắn (maxL 0 = auto/không giới hạn)
     generating: false, cancel: false, dragIdx: -1,
     workerURL: null, activeWorkers: null, cancelParallel: null,
   };
@@ -321,7 +322,7 @@
   // Xây TĂNG DẦN: mỗi lần đặt rắn đều kiểm tra CẢ BÀN vẫn giải được (isSolvable nhanh, Int32 phẳng)
   // -> KHÔNG bao giờ tạo board KẸT -> nhanh + fill cao + luôn giải được. Trả [{id,dir,cells}] hoặc null.
   // placeGuard cho phép rắn TẠM bị chặn (miễn tồn tại thứ tự gỡ hết) -> chuỗi phụ thuộc = độ khó.
-  function genFull(W, H, mask) {
+  function genFull(W, H, mask, params) {
     const inMask = (x, y) => x >= 0 && x < W && y >= 0 && y < H && (!mask || mask.has(x + "," + y));
     const DIRN = [{ dx: 0, dy: -1 }, { dx: 1, dy: 0 }, { dx: 0, dy: 1 }, { dx: -1, dy: 0 }];
     const board = [];
@@ -329,8 +330,11 @@
     let TC = 0; for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) if (board[y][x] === 0) TC++;
     if (TC < 2) return null;
     const snakes = []; let sid = 1;
-    const maxL = Math.max(6, Math.round(0.7 * (W + H)));   // trần độ dài ~35% chu vi
-    const straightBias = 0.88, lo = Math.min(maxL, 3);
+    const userMax = params ? +params.maxL || 0 : 0;
+    const maxL = userMax >= 2 ? userMax : Math.max(6, Math.round(0.7 * (W + H)));   // Max Len người dùng; <2 = auto ~35% chu vi (không cap cứng)
+    const fillTgt = (params && params.fill > 0) ? params.fill : 1;   // tỉ lệ phủ mục tiêu (1 = ép kín)
+    const userMin = params ? +params.minL || 2 : 2;
+    const straightBias = 0.88, lo = Math.max(2, Math.min(maxL, userMin));   // sàn độ dài ở pha đặt chính
     const free = (x, y) => x >= 0 && x < W && y >= 0 && y < H && board[y][x] === 0;
     const dirOf = cells => (cells.length < 2 ? null : dirFromTo(cells[1], cells[0]));
     const curFill = () => snakes.reduce((a, s) => a + s.cells.length, 0) / TC;
@@ -356,7 +360,7 @@
       if (r < 0.25) L = Math.random() < 0.15 ? 2 : 3 + (Math.random() * 2 | 0);
       else if (r < 0.6) L = 5 + (Math.random() * 5 | 0);
       else L = 10 + Math.floor(-Math.log(Math.max(1e-9, Math.random())) / 0.07);
-      return Math.max(2, Math.min(maxL, L));
+      return Math.max(lo, Math.min(maxL, L));   // tôn trọng sàn minL & trần maxL
     }
     function grow(sx, sy, primary, tlen) {   // boustrophedon: đi thẳng 5-7 ô rồi gấp
       const path = [{ x: sx, y: sy }]; board[sy][sx] = -9; let cur = { x: sx, y: sy }, d = primary, run = 0;
@@ -395,9 +399,11 @@
       return e;
     }
     const allEmpty = () => { const a = []; for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) if (board[y][x] === 0) a.push({ x, y }); return a; };
-    function absorbEmpty() {   // lấp tối đa: nối ô trống vào ĐUÔI rồi ĐẦU rắn kề; cụm ≥2 -> rắn mới
+    function absorbEmpty() {   // vét tới fill mục tiêu: nối ô trống vào ĐUÔI rồi ĐẦU rắn kề; cụm ≥2 -> rắn mới
+      const goalCells = fillTgt >= 1 ? TC : Math.ceil(fillTgt * TC);   // dừng khi đạt mục tiêu (=100% thì lấp hết)
       let pass = 0;
       while (pass++ < 10) {
+        if (snakes.reduce((a, s) => a + s.cells.length, 0) >= goalCells) break;
         let changed = false; const empties = allEmpty(); if (!empties.length) break;
         for (const e of empties) {
           if (board[e.y][e.x] !== 0) continue; let done2 = false;
@@ -427,7 +433,7 @@
     targets.sort((a, b) => b - a);
     const skip = new Set();
     for (let ti = 0; ti < targets.length; ti++) {
-      if (curFill() >= 1) break;
+      if (curFill() >= fillTgt) break;
       const empties = allEmpty().filter(c => !skip.has(c.x + "," + c.y));
       if (!empties.length) break;
       let seed, primary;
@@ -445,47 +451,49 @@
     // PHASE 2: lấp khe bằng rắn ngắn
     let guard = 0; const maxGuard = W * H * 3;
     while (guard++ < maxGuard) {
-      if (curFill() >= 1) break;
+      if (curFill() >= fillTgt) break;
       const empties = allEmpty().filter(c => !skip.has(c.x + "," + c.y));
       if (!empties.length) break;
-      const seed = empties[0], tlen = Math.max(2, Math.min(maxL, lo + rint(4)));
+      const seed = empties[0], tlen = Math.max(lo, Math.min(maxL, lo + rint(4)));
       const body = grow(seed.x, seed.y, DIRN[rint(4)], tlen);
       if (body.length < 2 || !placeGuard(body)) skip.add(seed.x + "," + seed.y);
     }
     // FILL BOOST B1: kéo dài đuôi rắn (giữ solvable, không vụn)
     { let changed = true, rounds = 0;
       while (changed && rounds++ < 30) {
-        if (curFill() >= 1) break; changed = false;
+        if (curFill() >= fillTgt) break; changed = false;
         for (const sn of snakes) {
           if (sn.cells.length >= maxL) continue;
           const tail = sn.cells[sn.cells.length - 1];
           for (const d of DIRN) { const nx = tail.x + d.dx, ny = tail.y + d.dy; if (free(nx, ny)) { sn.cells.push({ x: nx, y: ny }); board[ny][nx] = sn.id; if (isSolvable()) { changed = true; break; } sn.cells.pop(); board[ny][nx] = 0; } }
         }
       }
-      // B2: nhồi rắn 2 ô vào ô lẻ, dừng khi rắn-ngắn > 12%
-      for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+      // B2: nhồi rắn 2 ô vào ô lẻ, dừng khi rắn-ngắn > 12% (BỎ QUA nếu minL > 2 để tôn trọng sàn)
+      if (lo <= 2) for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
         if (board[y][x] !== 0) continue;
         const cur2 = snakes.filter(s => s.cells.length === 2).length;
         if (snakes.length && cur2 / snakes.length >= 0.12) break;
         for (const d of DIRN) { const nx = x + d.dx, ny = y + d.dy; if (free(nx, ny)) { const cells = [{ x, y }, { x: nx, y: ny }], dir = dirOf(cells); if (!dir) break; const id = sid; for (const c of cells) board[c.y][c.x] = id; snakes.push({ id, dir, cells }); if (isSolvable()) { sid++; break; } snakes.pop(); for (const c of cells) board[c.y][c.x] = 0; } }
       }
     }
-    absorbEmpty();   // lấp tối đa -> fill sát 100%
+    if (fillTgt >= 0.95) absorbEmpty();   // chỉ vét tối đa khi fill cao; fill thấp giữ độ thưa
     if (snakes.length < 2) return null;
     return snakes.map((s, i) => ({ id: i + 1, dir: s.dir, cells: s.cells.map(c => ({ x: c.x, y: c.y })) }));
   }
 
   // ---------- Sinh 1 level theo target (pure — dùng cả ở main thread & worker) ----------
-  // genFull cho board LẤP ĐẦY + LUÔN GIẢI ĐƯỢC; CHỈ nhận map fill ĐÚNG 100% (chưa kín -> loại).
-  // Thử vài cách xếp, trả map 100%-fill có độ khó GẦN target nhất. Trả null nếu không ra map nào.
+  // genFull cho board GIẢI ĐƯỢC theo fill mục tiêu; nhận map khớp fill (±3%, =100 ép kín) & độ khó đúng.
+  // Thử vài cách xếp, trả map hợp lệ có độ khó GẦN target nhất. Trả null nếu không ra map nào.
   function genLevelCore(W, H, mask, target, params) {
     const MAX = 4, fullArea = mask ? mask.size : W * H;
+    const wantFill = Math.round((params && params.fill > 0 ? params.fill : 1) * 100);   // % fill mục tiêu
     let bestArr = null, bestDd = Infinity;
     for (let r = 0; r < MAX; r++) {
-      const arr = genFull(W, H, mask);
+      const arr = genFull(W, H, mask, params);
       if (!arr || arr.length < 2) continue;
       let cov = 0; for (const p of arr) cov += p.cells.length;   // rắn chỉ nằm trong mask -> cov = ô đã phủ
-      if (cov !== fullArea) continue;   // CHƯA KÍN 100% -> loại, thử cách xếp khác
+      const fillReal = fullArea ? Math.round(cov / fullArea * 100) : 0;
+      if (wantFill >= 100 ? cov !== fullArea : Math.abs(fillReal - wantFill) > 3) continue;   // fill chưa khớp -> loại
       const pre = computeDifficulty(arr, W, H);
       if (pre.tier === "KẸT") continue;   // genFull đảm bảo solvable nên gần như không xảy ra
       const dd = target ? Math.abs(pre.score - target) : 0;
@@ -635,7 +643,7 @@ self.onmessage = function (e) {
     if (B.layoutType === "paint" && (!mask || !mask.size)) { $b("bProgInfo").textContent = "⚠ Chưa vẽ ô nào."; return; }
     const count = clamp(+$b("bCount").value, 1, 1000);
     const targets = sampleCurve(B.curve, count);
-    const params = { diff: 50, mother: $b("bMother").checked };   // luôn lấp đầy + độ-khó-hint mặc định; chỉ lọc theo độ khó
+    const params = { diff: 50, mother: $b("bMother").checked, fill: clamp(B.fillTarget, 50, 100) / 100, minL: clamp(B.minL, 2, 99), maxL: clamp(B.maxL, 0, 9999) };   // fill mục tiêu + sàn/trần độ dài rắn
     const dedup = true, W = B.W, H = B.H, startId = nextLibId();   // luôn bỏ trùng
     const wantParallel = typeof Worker !== "undefined" && count >= 8;   // luôn xử lý song song (tự fallback 1 luồng nếu bị chặn)
 
@@ -1058,6 +1066,9 @@ self.onmessage = function (e) {
   $b("bPaintClear").addEventListener("click", () => { B.paint = new Set(); renderPreview(); });
   $b("bPaintInvert").addEventListener("click", () => { const n = new Set(); for (let y = 0; y < B.H; y++) for (let x = 0; x < B.W; x++) { const k = x + "," + y; if (!B.paint.has(k)) n.add(k); } B.paint = n; renderPreview(); });
 
+  $b("bFill").addEventListener("input", () => { B.fillTarget = clamp(+$b("bFill").value, 50, 100); $b("bFillVal").textContent = B.fillTarget; });
+  $b("bMinL").addEventListener("input", () => { B.minL = clamp(+$b("bMinL").value, 2, 99); });
+  $b("bMaxL").addEventListener("input", () => { B.maxL = clamp(+$b("bMaxL").value, 0, 9999); });
   $b("bCount").addEventListener("input", updateCurveInfo);
   $b("bGenerate").addEventListener("click", runBatch);
   $b("bCancel").addEventListener("click", () => { B.cancel = true; if (B.cancelParallel) B.cancelParallel(); });
@@ -1121,6 +1132,9 @@ self.onmessage = function (e) {
   loadCurve(); loadLibrary();
   B.scale = clamp(+$b("bScale").value, 40, 100) / 100;
   $b("bScaleVal").textContent = $b("bScale").value;
+  B.fillTarget = clamp(+$b("bFill").value, 50, 100); $b("bFillVal").textContent = B.fillTarget;
+  B.minL = clamp(+$b("bMinL").value, 2, 99);
+  B.maxL = clamp(+$b("bMaxL").value, 0, 9999);
   setLayoutType("rect");
   updateCurveInfo();
   state.mode = "batch"; syncModeUI(); renderLibrary();   // mặc định hiện chế độ Hàng loạt
