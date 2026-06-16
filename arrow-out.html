@@ -111,15 +111,27 @@
             <button id="bPaintFill" style="flex:1">Bật hết</button>
             <button id="bPaintClear" style="flex:1">Xóa hết</button>
             <button id="bPaintInvert" style="flex:1">Đảo</button>
+            <button id="bPaintFillHoles" style="flex:1" title="Lấp các ô trống bị 4 phía bao quanh (đóng lỗ kín)">Lấp lỗ</button>
           </div>
         </div>
         <div class="hint" id="bLayoutInfo" style="margin-top:8px"></div>
       </div>
 
       <div class="card">
-        <h2>2 · Difficulty curve</h2>
+        <h2>2 · Độ khó</h2>
+        <div class="row" style="margin-bottom:6px; align-items:flex-end">
+          <label class="fld" style="flex:0 0 auto">Kiểu
+            <select id="bDiffMode">
+              <option value="curve">Đường cong</option>
+              <option value="range">Khoảng (min–max)</option>
+            </select></label>
+          <label class="fld" id="bRangeWrap" style="flex:1; display:none; gap:6px; flex-direction:row; align-items:flex-end">
+            <span class="fld" style="flex:0 0 auto">Min <input type="number" id="bDiffMin" min="0" max="100" value="0" style="width:64px" /></span>
+            <span class="fld" style="flex:0 0 auto">Max <input type="number" id="bDiffMax" min="0" max="100" value="100" style="width:64px" /></span>
+          </label>
+        </div>
         <div class="hint" style="margin-bottom:6px">
-          Kéo điểm để chỉnh độ khó theo tiến trình. <b>Nhấp đúp</b> nền = thêm điểm · <b>chuột phải</b> điểm = xóa.
+          <b>Đường cong</b>: kéo điểm chỉnh độ khó theo tiến trình (nhấp đúp = thêm · chuột phải = xóa). <b>Khoảng</b>: mọi level rơi vào [min–max].
         </div>
         <canvas id="bCurve" width="300" height="160" class="curve-canvas"></canvas>
         <div class="row" style="margin-top:8px">

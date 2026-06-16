@@ -17,6 +17,8 @@
     library: [], selection: new Set(), displayOrder: [],
     sort: "index", filter: "all",
     fillTarget: 100, minL: 2, maxL: 0,   // fill 50–100 (=100 ép kín); minL/maxL độ dài rắn (maxL 0 = auto)
+    diffMode: "curve", diffMin: 0, diffMax: 100,   // độ khó: 'curve' | 'range' (min..max; mặc định 0–100 = sao cũng được)
+    cloneColorMap: null, cloneColorDominant: -1, clonePinned: null,   // nhân bản: bản đồ màu + rắn GHIM (màu riêng lẻ giữ nguyên)
     generating: false, cancel: false, dragIdx: -1,
     workerURL: null, activeWorkers: null, cancelParallel: null,
   };
@@ -336,9 +338,22 @@
     const fillTgt = (params && params.fill > 0) ? params.fill : 1;   // tỉ lệ phủ mục tiêu (1 = ép kín)
     const userMin = params ? +params.minL || 2 : 2;
     const straightBias = 0.88, lo = Math.max(2, Math.min(maxL, userMin));   // sàn độ dài ở pha đặt chính
+    // RẮN GHIM (clone): pre-đặt nguyên trạng, giữ màu; engine chỉ fill các ô CÒN LẠI quanh chúng.
+    const pinned = (params && params.pinned) || null;
+    if (pinned) for (const pp of pinned) {
+      if (!pp.cells || pp.cells.length < 1) continue;
+      let okp = true; for (const c of pp.cells) if (!(c.y >= 0 && c.y < H && c.x >= 0 && c.x < W) || board[c.y][c.x] !== 0) { okp = false; break; }
+      if (!okp) continue;
+      const id = sid++; for (const c of pp.cells) board[c.y][c.x] = id;
+      snakes.push({ id, dir: pp.dir, cells: pp.cells.map(c => ({ x: c.x, y: c.y })), fixedColor: pp.fixedColor, ...(pp.mother ? { mother: true } : {}) });
+    }
     const free = (x, y) => x >= 0 && x < W && y >= 0 && y < H && board[y][x] === 0;
     const dirOf = cells => (cells.length < 2 ? null : dirFromTo(cells[1], cells[0]));
     const curFill = () => snakes.reduce((a, s) => a + s.cells.length, 0) / TC;
+    // VÙNG NGẦM (clone): mỗi rắn chỉ được nằm trong 1 vùng màu; rắn vùng này KHÔNG lấn vùng kia.
+    const zoneMap = (params && params.zoneMap) || null;
+    const zoneOf = (x, y) => zoneMap ? ((zoneMap[y] || [])[x]) : 0;
+    const sameZone = (x1, y1, x2, y2) => !zoneMap || zoneOf(x1, y1) === zoneOf(x2, y2);
 
     function isSolvable() {   // solver "natural turn" trên lưới phẳng (nhanh)
       const N = W * H, grid = new Int32Array(N);
@@ -372,7 +387,7 @@
         const force = run >= turnAfter;
         const cands = force ? perp.concat([d]) : (Math.random() < straightBias ? [d].concat(perp) : perp.concat([d]));
         let moved = false;
-        for (const dd of cands) { const nx = cur.x + dd.dx, ny = cur.y + dd.dy; if (nx >= 0 && nx < W && ny >= 0 && ny < H && board[ny][nx] === 0) { run = (dd === d) ? run + 1 : 0; board[ny][nx] = -9; path.push({ x: nx, y: ny }); cur = { x: nx, y: ny }; d = dd; moved = true; break; } }
+        for (const dd of cands) { const nx = cur.x + dd.dx, ny = cur.y + dd.dy; if (nx >= 0 && nx < W && ny >= 0 && ny < H && board[ny][nx] === 0 && sameZone(nx, ny, sx, sy)) { run = (dd === d) ? run + 1 : 0; board[ny][nx] = -9; path.push({ x: nx, y: ny }); cur = { x: nx, y: ny }; d = dd; moved = true; break; } }
         if (!moved) break;
       }
       path.forEach(c => board[c.y][c.x] = 0);
@@ -441,11 +456,11 @@
         let changed = false; const empties = allEmpty(); if (!empties.length) break;
         for (const e of empties) {
           if (board[e.y][e.x] !== 0) continue; let done2 = false;
-          for (const s of snakes) { const tl = s.cells[s.cells.length - 1];   // BỎ trần maxL ở bước lấp cuối -> ép đạt 100%
-            if (Math.abs(tl.x - e.x) + Math.abs(tl.y - e.y) === 1) { s.cells.push({ x: e.x, y: e.y }); board[e.y][e.x] = s.id; if (isSolvable()) { changed = done2 = true; break; } s.cells.pop(); board[e.y][e.x] = 0; } }
+          for (const s of snakes) { const tl = s.cells[s.cells.length - 1];   // nối ĐUÔI (cùng vùng màu)
+            if (Math.abs(tl.x - e.x) + Math.abs(tl.y - e.y) === 1 && sameZone(e.x, e.y, tl.x, tl.y)) { s.cells.push({ x: e.x, y: e.y }); board[e.y][e.x] = s.id; if (isSolvable()) { changed = done2 = true; break; } s.cells.pop(); board[e.y][e.x] = 0; } }
           if (done2) continue;
-          for (const s of snakes) { const hd = s.cells[0];
-            if (Math.abs(hd.x - e.x) + Math.abs(hd.y - e.y) === 1) { s.cells.unshift({ x: e.x, y: e.y }); const o = s.dir; s.dir = dirOf(s.cells); board[e.y][e.x] = s.id; if (s.dir && isSolvable()) { changed = done2 = true; break; } s.cells.shift(); s.dir = o; board[e.y][e.x] = 0; } }
+          for (const s of snakes) { const hd = s.cells[0];   // nối ĐẦU (cùng vùng màu)
+            if (Math.abs(hd.x - e.x) + Math.abs(hd.y - e.y) === 1 && sameZone(e.x, e.y, hd.x, hd.y)) { s.cells.unshift({ x: e.x, y: e.y }); const o = s.dir; s.dir = dirOf(s.cells); board[e.y][e.x] = s.id; if (s.dir && isSolvable()) { changed = done2 = true; break; } s.cells.shift(); s.dir = o; board[e.y][e.x] = 0; } }
         }
         // KHÔNG dựng rắn từ cụm trống còn lại (cụm DFS không phải đường đi -> thân rắn bị chéo/dị dạng).
         // Nối-đuôi/đầu hết cỡ mà vẫn chưa đạt fill -> dừng; genLevelCore sẽ LOẠI board này và thử cách xếp khác.
@@ -491,7 +506,7 @@
         for (const sn of snakes) {
           if (sn.cells.length >= maxL) continue;
           const tail = sn.cells[sn.cells.length - 1];
-          for (const d of DIRN) { const nx = tail.x + d.dx, ny = tail.y + d.dy; if (free(nx, ny)) { sn.cells.push({ x: nx, y: ny }); board[ny][nx] = sn.id; if (isSolvable()) { changed = true; break; } sn.cells.pop(); board[ny][nx] = 0; } }
+          for (const d of DIRN) { const nx = tail.x + d.dx, ny = tail.y + d.dy; if (free(nx, ny) && sameZone(nx, ny, tail.x, tail.y)) { sn.cells.push({ x: nx, y: ny }); board[ny][nx] = sn.id; if (isSolvable()) { changed = true; break; } sn.cells.pop(); board[ny][nx] = 0; } }
         }
       }
       // B2: nhồi rắn 2 ô vào ô lẻ, dừng khi rắn-ngắn > 12% (BỎ QUA nếu minL > 2 để tôn trọng sàn)
@@ -499,12 +514,12 @@
         if (board[y][x] !== 0) continue;
         const cur2 = snakes.filter(s => s.cells.length === 2).length;
         if (snakes.length && cur2 / snakes.length >= 0.12) break;
-        for (const d of DIRN) { const nx = x + d.dx, ny = y + d.dy; if (free(nx, ny)) { const cells = [{ x, y }, { x: nx, y: ny }], dir = dirOf(cells); if (!dir) break; const id = sid; for (const c of cells) board[c.y][c.x] = id; snakes.push({ id, dir, cells }); if (isSolvable()) { sid++; break; } snakes.pop(); for (const c of cells) board[c.y][c.x] = 0; } }
+        for (const d of DIRN) { const nx = x + d.dx, ny = y + d.dy; if (free(nx, ny) && sameZone(nx, ny, x, y)) { const cells = [{ x, y }, { x: nx, y: ny }], dir = dirOf(cells); if (!dir) break; const id = sid; for (const c of cells) board[c.y][c.x] = id; snakes.push({ id, dir, cells }); if (isSolvable()) { sid++; break; } snakes.pop(); for (const c of cells) board[c.y][c.x] = 0; } }
       }
     }
     if (fillTgt >= 0.95) absorbEmpty();   // chỉ vét tối đa khi fill cao; fill thấp giữ độ thưa
     if (snakes.length < 2) return null;
-    return snakes.map((s, i) => ({ id: i + 1, dir: s.dir, cells: s.cells.map(c => ({ x: c.x, y: c.y })) }));
+    return snakes.map((s, i) => ({ id: i + 1, dir: s.dir, cells: s.cells.map(c => ({ x: c.x, y: c.y })), ...(s.fixedColor >= 1 ? { fixedColor: s.fixedColor } : {}), ...(s.mother ? { mother: true } : {}) }));
   }
 
   // ---------- Sinh 1 level theo target (pure — dùng cả ở main thread & worker) ----------
@@ -543,7 +558,7 @@
       fillReal, empty: Math.max(0, area - covered), turns: a.turns,
       t1Pct: all.length ? Math.round(a.t1Avail / all.length * 100) : 0, stuck: a.stuck,
       diffDelta,
-      pieces: all.map(p => ({ dir: p.dir, cells: p.cells.map(c => [c.x, c.y]), ...(p.mother ? { mother: true } : {}) })),
+      pieces: all.map(p => ({ dir: p.dir, cells: p.cells.map(c => [c.x, c.y]), ...(p.mother ? { mother: true } : {}), ...(p.fixedColor >= 1 ? { fixedColor: p.fixedColor } : {}) })),
     };
   }
   function levelSignature(pieces) {
@@ -591,15 +606,21 @@ self.onmessage = function (e) {
   // Mỗi điểm trên curve = 1 SLOT có CHỈ SỐ i (giữ ĐÚNG vị trí đường cong). id level = startId + i,
   // nên dù worker hoàn thành lệch thứ tự thì id vẫn map đúng vị trí curve.
   function buildSlots(targets) { return targets.map((t, i) => ({ i, target: t, filled: false })); }
-  // Tìm slot CHƯA đầy có điểm khớp (|Δ|≤STRICT_DIFF) gần nhất; trả CHỈ SỐ slot, else -1.
-  function matchSlot(score, slots) {
+  // Tìm slot CHƯA đầy cho 1 điểm. range={min,max} -> nhận mọi điểm TRONG KHOẢNG (gắn slot trống bất kỳ);
+  // else (đường cong) -> chỉ nhận điểm khớp |Δ|≤STRICT_DIFF với target slot gần nhất. Trả chỉ số slot, else -1.
+  function matchSlot(score, slots, range) {
+    if (range) {
+      if (score < range.min || score > range.max) return -1;
+      for (const s of slots) if (!s.filled) return s.i;
+      return -1;
+    }
     let bestI = -1, bestD = Infinity;
     for (const s of slots) { if (s.filled) continue; const d = Math.abs(s.target - score); if (d < bestD) { bestD = d; bestI = s.i; } }
     return (bestI >= 0 && bestD <= STRICT_DIFF) ? bestI : -1;
   }
   // Sinh SONG SONG kiểu STREAM: worker stream level; main gắn vào slot curve còn trống nếu điểm KHỚP CHÍNH XÁC.
   // resolve: 'done' | 'cancel' | 'fallback'  (KHÔNG có 'exhausted' — grind tới khi đủ).
-  function runParallelStream(W, H, maskArr, targets, params, dedup, seen, count, onAccept) {
+  function runParallelStream(W, H, maskArr, targets, params, dedup, seen, count, onAccept, range) {
     return new Promise((resolve) => {
       let url; try { url = buildWorkerURL(); } catch (e) { resolve("fallback"); return; }
       const N = workerCount(), workers = [];
@@ -608,7 +629,8 @@ self.onmessage = function (e) {
       B.activeWorkers = workers;
       const finish = (r) => { if (dead) return; dead = true; workers.forEach(w => { try { w.terminate(); } catch (e) {} }); B.activeWorkers = null; B.cancelParallel = null; resolve(r); };
       B.cancelParallel = () => finish("cancel");
-      const hint = () => { if (tried - lastPaint >= 200) { lastPaint = tried; $b("bProgInfo").textContent = `Vét cạn (điểm chính xác)… ${made}/${count} đạt · đã thử ${tried} (đang tìm các mức còn thiếu)`; } };
+      const lbl = range ? `khoảng ${range.min}–${range.max}` : "điểm chính xác";
+      const hint = () => { if (tried - lastPaint >= 200) { lastPaint = tried; $b("bProgInfo").textContent = `Vét cạn (${lbl})… ${made}/${count} đạt · đã thử ${tried}`; } };
       for (let i = 0; i < N; i++) {
         let w; try { w = new Worker(url); } catch (e) { finish("fallback"); return; }
         workers.push(w);
@@ -618,9 +640,10 @@ self.onmessage = function (e) {
           if (data.hb) { tried += data.hb; hint(); return; }
           const lvl = data;
           if (dedup) { const sig = levelSignature(lvl.pieces); if (seen.has(sig)) { return; } seen.add(sig); }
-          const slot = matchSlot(lvl.score, slots);
+          const slot = matchSlot(lvl.score, slots, range);
           if (slot >= 0) {
-            slots[slot].filled = true; lvl.target = slots[slot].target; lvl.diffDelta = Math.abs(lvl.score - lvl.target);
+            slots[slot].filled = true;
+            if (range) { lvl.target = null; lvl.diffDelta = 0; } else { lvl.target = slots[slot].target; lvl.diffDelta = Math.abs(lvl.score - lvl.target); }
             made = onAccept(lvl, slot);
             if (made >= count) finish("done");
           } else { tried++; hint(); }
@@ -632,8 +655,8 @@ self.onmessage = function (e) {
     });
   }
   // Tuần tự (fallback / tắt song song) — cùng cơ chế hạn ngạch + grind vô hạn.
-  async function runSequentialStream(W, H, mask, targets, params, dedup, seen, count, onAccept) {
-    const slots = buildSlots(targets);
+  async function runSequentialStream(W, H, mask, targets, params, dedup, seen, count, onAccept, range) {
+    const slots = buildSlots(targets), lbl = range ? `khoảng ${range.min}–${range.max}` : "điểm chính xác";
     let made = 0, idx = 0, iters = 0, tried = 0, lastPaint = 0;
     while (made < count && !B.cancel) {
       iters++;
@@ -645,9 +668,9 @@ self.onmessage = function (e) {
       if (lvl) {
         let dup = false;
         if (dedup) { const sig = levelSignature(lvl.pieces); if (seen.has(sig)) dup = true; else seen.add(sig); }
-        if (!dup) { const slot = matchSlot(lvl.score, slots); if (slot >= 0) { slots[slot].filled = true; lvl.target = slots[slot].target; lvl.diffDelta = Math.abs(lvl.score - lvl.target); made = onAccept(lvl, slot); accepted = true; } }
+        if (!dup) { const slot = matchSlot(lvl.score, slots, range); if (slot >= 0) { slots[slot].filled = true; if (range) { lvl.target = null; lvl.diffDelta = 0; } else { lvl.target = slots[slot].target; lvl.diffDelta = Math.abs(lvl.score - lvl.target); } made = onAccept(lvl, slot); accepted = true; } }
       }
-      if (!accepted) { tried++; if (tried - lastPaint >= 100) { lastPaint = tried; $b("bProgInfo").textContent = `Vét cạn (điểm chính xác)… ${made}/${count} đạt · đã thử ${tried}`; } }
+      if (!accepted) { tried++; if (tried - lastPaint >= 100) { lastPaint = tried; $b("bProgInfo").textContent = `Vét cạn (${lbl})… ${made}/${count} đạt · đã thử ${tried}`; } }
       if (iters % 5 === 0 || made >= count) await new Promise(r => requestAnimationFrame(r));
     }
   }
@@ -668,8 +691,17 @@ self.onmessage = function (e) {
     if (B.layoutType === "image" && (!mask || !mask.size)) { $b("bProgInfo").textContent = "⚠ Mask ảnh rỗng — chỉnh ngưỡng/độ gắt."; return; }
     if (B.layoutType === "paint" && (!mask || !mask.size)) { $b("bProgInfo").textContent = "⚠ Chưa vẽ ô nào."; return; }
     const count = clamp(+$b("bCount").value, 1, 1000);
-    const targets = sampleCurve(B.curve, count);
-    const params = { diff: 50, mother: $b("bMother").checked, fill: clamp(B.fillTarget, 50, 100) / 100, minL: clamp(B.minL, 2, 99), maxL: clamp(B.maxL, 0, 9999) };   // fill mục tiêu + sàn/trần độ dài rắn
+    // Kiểu độ khó: 'range' (min–max, nhận mọi điểm trong khoảng) | 'curve' (đúng từng điểm đường cong).
+    let targets, range = null;
+    if (B.diffMode === "range") {
+      let lo = clamp(B.diffMin, 0, 100), hi = B.diffMax > 0 ? clamp(B.diffMax, 0, 100) : 100;   // max=0 -> không giới hạn trên (0/0 = sao cũng được)
+      if (lo > hi) { const t = lo; lo = hi; hi = t; }
+      range = { min: lo, max: hi };
+      targets = []; for (let i = 0; i < count; i++) targets.push(Math.round(lo + (hi - lo) * (count === 1 ? 0.5 : i / (count - 1))));   // rải đều trong khoảng để dẫn hướng sinh
+    } else {
+      targets = sampleCurve(B.curve, count);
+    }
+    const params = { diff: 50, mother: $b("bMother").checked, fill: clamp(B.fillTarget, 50, 100) / 100, minL: clamp(B.minL, 2, 99), maxL: clamp(B.maxL, 0, 9999), pinned: B.clonePinned || null, zoneMap: B.cloneColorMap || null };   // fill + độ dài + vùng màu (clone)
     const dedup = true, W = B.W, H = B.H, startId = nextLibId();   // luôn bỏ trùng
     const wantParallel = typeof Worker !== "undefined" && count >= 8;   // luôn xử lý song song (tự fallback 1 luồng nếu bị chặn)
 
@@ -682,23 +714,25 @@ self.onmessage = function (e) {
     let made = 0, mode = "1 luồng", errMsg = "", cancelled = false;
     // mỗi level ĐÚNG ĐIỂM + 100% fill -> id = startId + slot (map ĐÚNG vị trí curve, kể cả sinh lệch thứ tự).
     const onAccept = (lvl, slot) => {
-      lvl.id = startId + slot; lvl.slot = slot; B.library.push(lvl); B.selection.add(lvl.id); made++;
+      lvl.id = startId + slot; lvl.slot = slot;
+      if (B.cloneColorMap) applyCloneColors(lvl.pieces);   // nhân bản: tô màu theo vùng gốc
+      B.library.push(lvl); B.selection.add(lvl.id); made++;
       appendLibCard(lvl);
       $b("bProgBar").style.width = Math.round(made / count * 100) + "%";
-      $b("bProgInfo").textContent = `Vét cạn (điểm chính xác)… ${made}/${count} đạt`;
+      $b("bProgInfo").textContent = `Đang sinh… ${made}/${count} đạt`;
       return made;
     };
     try {
       if (wantParallel) {
         const N = workerCount(); mode = N + " luồng";
-        const r = await runParallelStream(W, H, mask ? Array.from(mask) : null, targets, params, dedup, seen, count, onAccept);
+        const r = await runParallelStream(W, H, mask ? Array.from(mask) : null, targets, params, dedup, seen, count, onAccept, range);
         if (r === "cancel") cancelled = true;
         else if (r === "fallback") {   // worker bị chặn/lỗi -> 1 luồng
           $b("bProgInfo").textContent = "⚠ Worker bị chặn — chuyển 1 luồng…"; mode = "1 luồng";
-          await runSequentialStream(W, H, mask, targets, params, dedup, seen, count, onAccept); cancelled = B.cancel;
+          await runSequentialStream(W, H, mask, targets, params, dedup, seen, count, onAccept, range); cancelled = B.cancel;
         }
       } else {
-        await runSequentialStream(W, H, mask, targets, params, dedup, seen, count, onAccept); cancelled = B.cancel;
+        await runSequentialStream(W, H, mask, targets, params, dedup, seen, count, onAccept, range); cancelled = B.cancel;
       }
     } catch (err) {
       errMsg = (err && err.message) ? err.message : String(err);
@@ -709,7 +743,7 @@ self.onmessage = function (e) {
       $b("bProgInfo").textContent = errMsg
         ? "✗ Lỗi khi sinh: " + errMsg + " — mở Console (F12) xem chi tiết."
         : (cancelled ? "⛔ Đã hủy · " : `✓ Xong (${mode}) · `)
-          + `${made}/${count} level (fill 100% · điểm khó ĐÚNG curve)`
+          + `${made}/${count} level · ` + (range ? `độ khó trong [${range.min}–${range.max}]` : "độ khó ĐÚNG curve")
           + (cancelled && made < count ? ` · còn thiếu ${count - made} (bấm Sinh để vét tiếp)` : "");
       setTimeout(() => { $b("bProgWrap").style.display = "none"; }, 1600);
       try { saveLibrary(); renderLibrary(); } catch (e2) { console.error("[Thư viện] lỗi render:", e2); }
@@ -771,8 +805,9 @@ self.onmessage = function (e) {
       + `\nLượt giải: ${lvl.turns != null ? lvl.turns : "—"} · Thoát ngay lượt 1: ${lvl.t1Pct != null ? lvl.t1Pct + "%" : "—"} · Kẹt: ${lvl.stuck != null ? lvl.stuck : 0}`;
     const act = document.createElement("div"); act.className = "lc-actions";
     const playB = document.createElement("button"); playB.textContent = "▶"; playB.title = "Chơi"; playB.addEventListener("click", () => playLibrary(lvl.id));
+    const cloneB = document.createElement("button"); cloneB.textContent = "⧉"; cloneB.title = "Nhân bản: tạo hàng loạt cùng layout + độ khó ±3 + màu theo vùng"; cloneB.addEventListener("click", () => cloneLevel(lvl));
     const delB = document.createElement("button"); delB.textContent = "🗑"; delB.className = "danger"; delB.title = "Xóa"; delB.addEventListener("click", () => deleteLevel(lvl.id));
-    act.append(playB, delB); card.appendChild(act);
+    act.append(playB, cloneB, delB); card.appendChild(act);
     return card;
   }
   function renderLibrary() {
@@ -799,6 +834,80 @@ self.onmessage = function (e) {
     const tg = $b("bSelToggle"); if (tg) tg.textContent = allSel ? "Bỏ chọn" : "Chọn hết";
   }
   function deleteLevel(id) { B.library = B.library.filter(l => l.id !== id); B.selection.delete(id); saveLibrary(); renderLibrary(); }
+
+  // Tự lấp lỗ: ô TRỐNG mà cả 4 hàng xóm (trong bàn) đều thuộc mask -> thêm vào mask. Lặp tới ổn định.
+  function autoFillHoles(cells, W, H) {
+    const s = new Set(cells); let changed = true;
+    while (changed) {
+      changed = false;
+      for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+        const k = x + "," + y; if (s.has(k)) continue;
+        let allIn = true;
+        for (const d of [[0, -1], [0, 1], [-1, 0], [1, 0]]) { const nx = x + d[0], ny = y + d[1]; if (nx < 0 || nx >= W || ny < 0 || ny >= H || !s.has(nx + "," + ny)) { allIn = false; break; } }
+        if (allIn) { s.add(k); changed = true; }
+      }
+    }
+    return s;
+  }
+
+  // Lan màu: ô mask chưa có màu (lỗ/đệm) -> nhận màu của VÙNG MÀU gần nhất (BFS đa nguồn) -> mọi ô có 1 vùng.
+  function floodZones(cm, paint, W, H) {
+    const q = []; for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) if (cm[y][x] >= 1) q.push([x, y]);
+    if (!q.length) return; let head = 0;
+    while (head < q.length) {
+      const [x, y] = q[head++], col = cm[y][x];
+      for (const d of [[0, -1], [0, 1], [-1, 0], [1, 0]]) { const nx = x + d[0], ny = y + d[1];
+        if (nx < 0 || nx >= W || ny < 0 || ny >= H || !paint.has(nx + "," + ny) || cm[ny][nx] >= 1) continue;
+        cm[ny][nx] = col; q.push([nx, ny]);
+      }
+    }
+  }
+  // ---------- Nhân bản (clone): bắt chước layout + PHÂN VÙNG NGẦM theo màu + đổi màu random/level ----------
+  const cellXY = c => Array.isArray(c) ? { x: c[0], y: c[1] } : { x: c.x, y: c.y };
+  function cloneLevel(lvl) {
+    // ----- Layout: đệm 1 ô viền quanh hình (dịch +1, W+2/H+2) -> ô tô không chạm rìa; scale 100% -----
+    B.W = lvl.w + 2; B.H = lvl.h + 2; $b("bW").value = B.W; $b("bH").value = B.H;
+    B.scale = 1; $b("bScale").value = 100; $b("bScaleVal").textContent = "100";
+    // paint mask + bản đồ màu GỐC theo ô (dịch +1)
+    let colored = false; const cm = Array.from({ length: B.H }, () => Array(B.W).fill(-1)); const freq = {};
+    B.paint = new Set();
+    for (const p of lvl.pieces) { const fc = (typeof p.fixedColor === "number") ? p.fixedColor : -1; if (fc >= 1) colored = true;
+      for (const c of p.cells) { const { x, y } = cellXY(c); const X = x + 1, Y = y + 1; if (Y >= 0 && Y < B.H && X >= 0 && X < B.W) { B.paint.add(X + "," + Y); cm[Y][X] = fc; if (fc >= 1) freq[fc] = (freq[fc] || 0) + 1; } } }
+    B.paint = autoFillHoles(B.paint, B.W, B.H);   // gốc chưa fill hết -> tự lấp các ô 0 bị 1 bao quanh
+    floodZones(cm, B.paint, B.W, B.H);            // ô chưa màu (lỗ/đệm trong) -> gán về vùng màu gần nhất
+    B.layoutType = "paint"; $b("bLayoutType").value = "paint"; setLayoutType("paint");
+    // fill kín + độ khó [0–100] (sao cũng được) + bỏ "Rắn mẹ"
+    B.fillTarget = 100; $b("bFill").value = 100; $b("bFillVal").textContent = "100";
+    $b("bMother").checked = false;
+    B.diffMode = "range"; $b("bDiffMode").value = "range";
+    B.diffMin = 0; B.diffMax = 100; $b("bDiffMin").value = 0; $b("bDiffMax").value = 100; syncDiffMode();
+    // VÙNG NGẦM theo màu: rắn sinh ra bị giới hạn trong 1 vùng màu (không lấn vùng khác); màu remap random/level.
+    B.clonePinned = null;
+    if (colored) { B.cloneColorMap = cm; let mx = 0, domOld = -1; for (const k in freq) if (freq[k] > mx) { mx = freq[k]; domOld = +k; } B.cloneColorDominant = domOld; colorMode = "game"; if (typeof syncColorBtn === "function") syncColorBtn(); }
+    else { B.cloneColorMap = null; B.cloneColorDominant = -1; }
+    state.mode = "batch"; state.fromLibrary = null; syncModeUI();
+    renderPreview(); updateCurveInfo();
+    $b("bProgInfo").textContent = `⧉ Nhân bản #${lvl.id}: layout ${B.W}×${B.H} (đệm viền)${colored ? " · PHÂN VÙNG theo màu" : " · không màu"} · độ khó 0–100. Bấm 🎲 Sinh.`;
+    try { $b("bGenerate").scrollIntoView({ behavior: "smooth", block: "center" }); } catch (e) {}
+  }
+  // Tô rắn mới theo bản đồ màu clone: mỗi rắn lấy màu gốc phủ NHIỀU Ô NHẤT trong các ô nó nằm.
+  // Tô màu cho 1 level clone: mỗi level 1 phép ĐỔI MÀU NGẪU NHIÊN riêng (dịch vòng 48 màu),
+  // nhưng nhất quán trong level: màu GỐC giống nhau -> màu mới giống nhau (cả rắn ghim lẫn rắn sinh).
+  function applyCloneColors(pieces) {
+    const cm = B.cloneColorMap; if (!cm || cm.length !== B.H || !cm[0] || cm[0].length !== B.W) return;
+    const offset = 1 + Math.floor(Math.random() * 47);   // ≠0 -> khác gốc; song ánh -> màu khác nhau vẫn khác nhau
+    const remap = c => (c >= 1 && c <= 48) ? ((c - 1 + offset) % 48) + 1 : c;
+    for (const p of pieces) {
+      let orig;
+      if (typeof p.fixedColor === "number" && p.fixedColor >= 1) orig = p.fixedColor;   // rắn GHIM: màu gốc của nó
+      else {   // rắn sinh mới: lấy màu gốc phủ nhiều ô nhất trong vùng
+        const freq = {}; let best = -1, bestN = 0;
+        for (const c of p.cells) { const { x, y } = cellXY(c); const col = (cm[y] || [])[x]; if (col >= 1) { freq[col] = (freq[col] || 0) + 1; if (freq[col] > bestN) { bestN = freq[col]; best = col; } } }
+        orig = best >= 1 ? best : (B.cloneColorDominant >= 1 ? B.cloneColorDominant : -1);
+      }
+      if (orig >= 1) p.fixedColor = remap(orig);   // cùng màu gốc -> cùng màu mới (theo offset của level này)
+    }
+  }
   function selectedLevels() {   // theo id tăng dần = đúng thứ tự đường cong (kể cả sinh lệch)
     return B.library.filter(l => B.selection.has(l.id)).sort((a, b) => a.id - b.id);
   }
@@ -831,6 +940,10 @@ self.onmessage = function (e) {
   }
   function loadLibrary() {
     try { const r = localStorage.getItem(LS_LIB); if (r) { const d = JSON.parse(r); if (d && Array.isArray(d.lib)) B.library = d.lib; } } catch (e) {}
+    // có level màu game -> bật Màu Game (nếu không, reload sẽ tô rainbow random, mất màu gốc)
+    if (B.library.some(l => l.pieces && l.pieces.some(p => typeof p.fixedColor === "number" && p.fixedColor >= 1)) && typeof colorMode !== "undefined" && colorMode !== "game") {
+      colorMode = "game"; if (typeof syncColorBtn === "function") syncColorBtn();
+    }
   }
 
   // ---------- ZIP (store, không nén) ----------
@@ -1066,13 +1179,14 @@ self.onmessage = function (e) {
     renderPreview();   // paint bắt đầu TRỐNG (vẽ từ đầu); dùng "Bật hết" nếu muốn full rồi xóa bớt
   }
   function applySize() {
+    B.cloneColorMap = null; B.clonePinned = null;   // đổi cỡ thủ công -> bỏ clone (khác kích thước)
     B.W = clamp(+$b("bW").value, 3, 60); B.H = clamp(+$b("bH").value, 3, 60);
     $b("bW").value = B.W; $b("bH").value = B.H;
     B.paint = new Set([...B.paint].filter(k => { const i = k.indexOf(","), x = +k.slice(0, i), y = +k.slice(i + 1); return x < B.W && y < B.H; }));
     renderPreview(); updateCurveInfo();
   }
 
-  $b("bLayoutType").addEventListener("change", () => setLayoutType($b("bLayoutType").value));
+  $b("bLayoutType").addEventListener("change", () => { B.cloneColorMap = null; B.clonePinned = null; setLayoutType($b("bLayoutType").value); });   // đổi layout thủ công -> bỏ clone
   $b("bApplySize").addEventListener("click", applySize);
   $b("bImgBtn").addEventListener("click", () => $b("bImg").click());
   $b("bImg").addEventListener("change", () => {
@@ -1091,7 +1205,16 @@ self.onmessage = function (e) {
   $b("bPaintFill").addEventListener("click", () => { B.paint = new Set(); for (let y = 0; y < B.H; y++) for (let x = 0; x < B.W; x++) B.paint.add(x + "," + y); renderPreview(); });
   $b("bPaintClear").addEventListener("click", () => { B.paint = new Set(); renderPreview(); });
   $b("bPaintInvert").addEventListener("click", () => { const n = new Set(); for (let y = 0; y < B.H; y++) for (let x = 0; x < B.W; x++) { const k = x + "," + y; if (!B.paint.has(k)) n.add(k); } B.paint = n; renderPreview(); });
+  $b("bPaintFillHoles").addEventListener("click", () => { B.paint = autoFillHoles(B.paint, B.W, B.H); renderPreview(); });
 
+  function syncDiffMode() {   // hiện/ẩn min-max vs đường cong theo kiểu độ khó
+    const range = B.diffMode === "range";
+    const rw = $b("bRangeWrap"); if (rw) rw.style.display = range ? "flex" : "none";
+    const cv = $b("bCurve"); if (cv) cv.style.opacity = range ? "0.35" : "1";
+  }
+  $b("bDiffMode").addEventListener("change", () => { B.diffMode = $b("bDiffMode").value; syncDiffMode(); updateCurveInfo(); });
+  $b("bDiffMin").addEventListener("input", () => { B.diffMin = clamp(+$b("bDiffMin").value, 0, 100); });
+  $b("bDiffMax").addEventListener("input", () => { B.diffMax = clamp(+$b("bDiffMax").value, 0, 100); });
   $b("bFill").addEventListener("input", () => { B.fillTarget = clamp(+$b("bFill").value, 50, 100); $b("bFillVal").textContent = B.fillTarget; });
   $b("bMinL").addEventListener("input", () => { B.minL = clamp(+$b("bMinL").value, 2, 99); });
   $b("bMaxL").addEventListener("input", () => { B.maxL = clamp(+$b("bMaxL").value, 0, 9999); });
@@ -1161,6 +1284,9 @@ self.onmessage = function (e) {
   B.fillTarget = clamp(+$b("bFill").value, 50, 100); $b("bFillVal").textContent = B.fillTarget;
   B.minL = clamp(+$b("bMinL").value, 2, 99);
   B.maxL = clamp(+$b("bMaxL").value, 0, 9999);
+  B.diffMode = $b("bDiffMode").value;
+  B.diffMin = clamp(+$b("bDiffMin").value, 0, 100); B.diffMax = clamp(+$b("bDiffMax").value, 0, 100);
+  syncDiffMode();
   setLayoutType("rect");
   updateCurveInfo();
   state.mode = "batch"; syncModeUI(); renderLibrary();   // mặc định hiện chế độ Hàng loạt
