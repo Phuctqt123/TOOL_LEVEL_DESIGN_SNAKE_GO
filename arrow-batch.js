@@ -413,16 +413,8 @@
           for (const s of snakes) { const hd = s.cells[0];
             if (Math.abs(hd.x - e.x) + Math.abs(hd.y - e.y) === 1) { s.cells.unshift({ x: e.x, y: e.y }); const o = s.dir; s.dir = dirOf(s.cells); board[e.y][e.x] = s.id; if (s.dir && isSolvable()) { changed = done2 = true; break; } s.cells.shift(); s.dir = o; board[e.y][e.x] = 0; } }
         }
-        if (!changed) {
-          const remain = allEmpty(); if (!remain.length) break;
-          const seen = new Set(); let made = false;
-          for (const st0 of remain) { const k = st0.x + "," + st0.y; if (seen.has(k)) continue;
-            const cl = [], st = [st0]; seen.add(k);
-            while (st.length) { const c = st.pop(); cl.push(c); for (const d of DIRN) { const nx = c.x + d.dx, ny = c.y + d.dy, kk = nx + "," + ny; if (nx >= 0 && nx < W && ny >= 0 && ny < H && inMask(nx, ny) && board[ny][nx] === 0 && !seen.has(kk)) { seen.add(kk); st.push({ x: nx, y: ny }); } } }
-            if (cl.length >= 2) { const id = snakes.reduce((m, s) => Math.max(m, s.id), 0) + 1; const cells = cl.map(c => ({ x: c.x, y: c.y })); const dir = dirOf(cells);
-              if (dir) { for (const c of cells) board[c.y][c.x] = id; snakes.push({ id, dir, cells }); if (isSolvable()) made = true; else { for (const c of cells) board[c.y][c.x] = 0; snakes.pop(); } } } }
-          if (made) changed = true;
-        }
+        // KHÔNG dựng rắn từ cụm trống còn lại (cụm DFS không phải đường đi -> thân rắn bị chéo/dị dạng).
+        // Nối-đuôi/đầu hết cỡ mà vẫn chưa đạt fill -> dừng; genLevelCore sẽ LOẠI board này và thử cách xếp khác.
         if (!changed) break;
       }
     }
