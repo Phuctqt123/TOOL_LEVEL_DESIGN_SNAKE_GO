@@ -124,6 +124,7 @@
             <select id="bDiffMode">
               <option value="curve">Đường cong</option>
               <option value="range">Khoảng (min–max)</option>
+              <option value="trap">Bẫy thao tác</option>
             </select></label>
           <label class="fld" id="bRangeWrap" style="flex:1; display:none; gap:6px; flex-direction:row; align-items:flex-end">
             <span class="fld" style="flex:0 0 auto">Min <input type="number" id="bDiffMin" min="0" max="100" value="0" style="width:64px" /></span>
@@ -131,7 +132,7 @@
           </label>
         </div>
         <div class="hint" style="margin-bottom:6px">
-          <b>Đường cong</b>: kéo điểm chỉnh độ khó theo tiến trình (nhấp đúp = thêm · chuột phải = xóa). <b>Khoảng</b>: mọi level rơi vào [min–max].
+          <b>Đường cong</b>: kéo điểm chỉnh độ khó theo tiến trình (nhấp đúp = thêm · chuột phải = xóa). <b>Khoảng</b>: mọi level rơi vào [min–max]. <b>Bẫy thao tác</b>: độ khó tự do + nhồi NHIỀU bẫy màu (con kẹt đội màu nhóm move-được → lừa tap).
         </div>
         <canvas id="bCurve" width="300" height="160" class="curve-canvas"></canvas>
         <div class="row" style="margin-top:8px">
@@ -162,7 +163,7 @@
         </div>
         <div class="row" style="align-items:center">
           <label class="chk" title="Thêm 1 viền rắn mẹ ôm sát hình"><input type="checkbox" id="bMother" /> Rắn mẹ (viền ôm)</label>
-          <label class="chk" title="Khi NHÂN BẢN (⧉): bỏ qua màu mẫu, chỉ mượn LAYOUT; tự chia vài VÙNG LỚN (mỗi vùng 1 màu, ít màu) rồi tô."><input type="checkbox" id="bCloneAutoColor" /> Tự thiết kế màu (clone)</label>
+          <label class="chk" id="bCloneAutoColorWrap" style="display:none" title="Khi NHÂN BẢN (⧉): bỏ qua màu mẫu, chỉ mượn LAYOUT; tự chia vài VÙNG LỚN (mỗi vùng 1 màu) rồi tô. (Tự-gen luôn tự thiết kế màu nên nút này chỉ hiện khi clone.)"><input type="checkbox" id="bCloneAutoColor" /> Tự thiết kế màu (clone)</label>
         </div>
         <div class="row" style="margin-top:10px">
           <button id="bGenerate" class="primary" style="flex:1">🎲 Sinh hàng loạt</button>

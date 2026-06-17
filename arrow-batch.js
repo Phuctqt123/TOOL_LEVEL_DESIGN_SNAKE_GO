@@ -18,7 +18,7 @@
     sort: "index", filter: "all",
     fillTarget: 100, minL: 2, maxL: 0,   // fill 50–100 (=100 ép kín); minL/maxL độ dài rắn (maxL 0 = auto)
     diffMode: "curve", diffMin: 0, diffMax: 100,   // độ khó: 'curve' | 'range' (min..max; mặc định 0–100 = sao cũng được)
-    cloneColorMap: null, cloneColorDominant: -1, clonePinned: null,   // nhân bản: bản đồ màu + rắn GHIM (màu riêng lẻ giữ nguyên)
+    cloneColorMap: null, cloneColorDominant: -1, clonePinned: null, cloneKeep: false, cloneSource: null,   // nhân bản: bản đồ màu; cloneKeep = bắt chước màu gốc
     generating: false, cancel: false, dragIdx: -1,
     workerURL: null, activeWorkers: null, cancelParallel: null,
   };
@@ -468,6 +468,38 @@
       }
     }
 
+    // BẪY THAO TÁC: đặt TRƯỚC một HÀNG ĐẦU rắn cùng QUAY RA — song song, liền kề, đều thoát được; thân mọc
+    // VÀO TRONG bằng grow() (chiến thuật cũ, bẻ khúc tự nhiên). Sau khi fill xong sẽ đảo con GIỮA -> quay VÔ.
+    const baitIds = [];
+    if (params && params.trap) {
+      const cards = [{ dx: 0, dy: -1 }, { dx: 0, dy: 1 }, { dx: -1, dy: 0 }, { dx: 1, dy: 0 }];
+      let best = null;   // đoạn viền-ra-được liền kề DÀI nhất trong 4 hướng
+      for (const out of cards) {
+        const along = out.dx !== 0 ? { dx: 0, dy: 1 } : { dx: 1, dy: 0 };
+        const okCell = (x, y) => x >= 0 && x < W && y >= 0 && y < H && board[y][x] === 0 && !inMask(x + out.dx, y + out.dy);
+        const seen = new Set();
+        for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+          if (!okCell(x, y) || seen.has(x + "," + y)) continue;
+          const run = []; let cx = x, cy = y;
+          while (okCell(cx, cy) && !seen.has(cx + "," + cy)) { seen.add(cx + "," + cy); run.push({ x: cx, y: cy }); cx += along.dx; cy += along.dy; }
+          if (!best || run.length > best.run.length) best = { out, run };
+        }
+      }
+      if (best && best.run.length >= 3) {
+        const inward = { dx: -best.out.dx, dy: -best.out.dy };
+        for (const cell of best.run) {
+          if (board[cell.y][cell.x] !== 0) continue;
+          const body = grow(cell.x, cell.y, inward, expLen());   // mọc thân vào trong (đầu = ô viền)
+          if (body.length < 2) continue;
+          if (!(body[0].x === cell.x && body[0].y === cell.y)) body.reverse();   // đầu = ô viền -> dir quay RA
+          const dir = dirOf(body); if (!dir) continue;
+          const id = sid; for (const c of body) board[c.y][c.x] = id;
+          snakes.push({ id, dir, cells: body.map(c => ({ x: c.x, y: c.y })), bait: true });
+          if (isSolvable()) { sid++; baitIds.push(id); } else { snakes.pop(); for (const c of body) board[c.y][c.x] = 0; }   // hỏng -> bỏ
+        }
+      }
+    }
+
     // PHASE 1: rắn dài trước (sort giảm dần), 40% đầu bám viền (edge-first)
     const nTarget = Math.round(W * H / 8), targets = [];
     for (let i = 0; i < nTarget; i++) targets.push(expLen());
@@ -518,8 +550,23 @@
       }
     }
     if (fillTgt >= 0.95) absorbEmpty();   // chỉ vét tối đa khi fill cao; fill thấp giữ độ thưa
+    // BẪY: đảo con GIỮA hàng mồi -> quay VÔ; chỉ giữ nếu đầu mới BỊ CHẶN (click = va chạm) & bàn vẫn giải được.
+    if (params && params.trap && baitIds.length >= 2) {
+      const mid = (baitIds.length - 1) / 2;
+      const ord = baitIds.map((id, i) => [id, Math.abs(i - mid)]).sort((a, b) => a[1] - b[1]).map(z => z[0]);   // giữa hàng trước, lan ra 2 bên
+      for (const id of ord) {
+        const s = snakes.find(z => z.id === id); if (!s || s.cells.length < 2) continue;
+        const oc = s.cells, od = s.dir, rev = s.cells.slice().reverse(), nd = dirOf(rev);
+        if (!nd || nd === od) continue;
+        s.cells = rev; s.dir = nd;
+        const dd = DELTA[nd]; let bx = rev[0].x + dd.x, by = rev[0].y + dd.y, blk = false;   // tia từ đầu MỚI: gặp ô bị chiếm trước rìa = bị chặn
+        while (bx >= 0 && by >= 0 && bx < W && by < H) { const v = board[by][bx]; if (v > 0) { blk = true; break; } if (v === null) break; bx += dd.x; by += dd.y; }
+        if (blk && isSolvable()) { s.trap = true; break; }   // quay vô bị chặn + bàn vẫn giải -> bẫy thật
+        s.cells = oc; s.dir = od;   // không chặn / hỏng -> hoàn lại, thử con kế giữa
+      }
+    }
     if (snakes.length < 2) return null;
-    return snakes.map((s, i) => ({ id: i + 1, dir: s.dir, cells: s.cells.map(c => ({ x: c.x, y: c.y })), ...(s.fixedColor >= 1 ? { fixedColor: s.fixedColor } : {}), ...(s.mother ? { mother: true } : {}) }));
+    return snakes.map((s, i) => ({ id: i + 1, dir: s.dir, cells: s.cells.map(c => ({ x: c.x, y: c.y })), ...(s.fixedColor >= 1 ? { fixedColor: s.fixedColor } : {}), ...(s.mother ? { mother: true } : {}), ...(s.bait ? { bait: true } : {}), ...(s.trap ? { trap: true } : {}) }));
   }
 
   // ---------- Sinh 1 level theo target (pure — dùng cả ở main thread & worker) ----------
@@ -530,7 +577,7 @@
     const wantFill = Math.round((params && params.fill > 0 ? params.fill : 1) * 100);   // % fill mục tiêu
     let bestArr = null, bestDd = Infinity;
     for (let r = 0; r < MAX; r++) {
-      const arr = genFull(W, H, mask, params, target);   // target -> ép siết tỉ lệ theo độ khó muốn
+      const arr = genFull(W, H, mask, params, target);   // target -> ép siết tỉ lệ theo độ khó muốn (bẫy thao tác: layout tự nhiên, bẫy xử lý ở onAccept)
       if (!arr || arr.length < 2) continue;
       let cov = 0; for (const p of arr) cov += p.cells.length;   // rắn chỉ nằm trong mask -> cov = ô đã phủ
       const fillReal = fullArea ? Math.round(cov / fullArea * 100) : 0;
@@ -558,7 +605,7 @@
       fillReal, empty: Math.max(0, area - covered), turns: a.turns,
       t1Pct: all.length ? Math.round(a.t1Avail / all.length * 100) : 0, stuck: a.stuck,
       diffDelta,
-      pieces: all.map(p => ({ dir: p.dir, cells: p.cells.map(c => [c.x, c.y]), ...(p.mother ? { mother: true } : {}), ...(p.fixedColor >= 1 ? { fixedColor: p.fixedColor } : {}) })),
+      pieces: all.map(p => ({ dir: p.dir, cells: p.cells.map(c => [c.x, c.y]), ...(p.mother ? { mother: true } : {}), ...(p.fixedColor >= 1 ? { fixedColor: p.fixedColor } : {}), ...(p.bait ? { bait: true } : {}), ...(p.trap ? { trap: true } : {}) })),
     };
   }
   function levelSignature(pieces) {
@@ -693,16 +740,30 @@ self.onmessage = function (e) {
     const count = clamp(+$b("bCount").value, 1, 1000);
     // Kiểu độ khó: 'range' (min–max, nhận mọi điểm trong khoảng) | 'curve' (đúng từng điểm đường cong).
     let targets, range = null;
-    if (B.diffMode === "range") {
-      let lo = clamp(B.diffMin, 0, 100), hi = B.diffMax > 0 ? clamp(B.diffMax, 0, 100) : 100;   // max=0 -> không giới hạn trên (0/0 = sao cũng được)
+    const trapMode = B.diffMode === "trap";
+    if (B.diffMode === "range" || trapMode) {
+      let lo, hi;
+      if (trapMode) { lo = 0; hi = 100; }   // bẫy thao tác: độ khó tự do, tập trung vào bẫy
+      else { lo = clamp(B.diffMin, 0, 100); hi = B.diffMax > 0 ? clamp(B.diffMax, 0, 100) : 100; }
       if (lo > hi) { const t = lo; lo = hi; hi = t; }
       range = { min: lo, max: hi };
       targets = []; for (let i = 0; i < count; i++) targets.push(Math.round(lo + (hi - lo) * (count === 1 ? 0.5 : i / (count - 1))));   // rải đều trong khoảng để dẫn hướng sinh
     } else {
       targets = sampleCurve(B.curve, count);
     }
-    const params = { diff: 50, mother: $b("bMother").checked, fill: clamp(B.fillTarget, 50, 100) / 100, minL: clamp(B.minL, 2, 99), maxL: clamp(B.maxL, 0, 9999), pinned: B.clonePinned || null, zoneMap: B.cloneColorMap || null };   // fill + độ dài + vùng màu (clone)
-    const dedup = true, W = B.W, H = B.H, startId = nextLibId();   // luôn bỏ trùng
+    const trapPerN = trapMode ? 8 : 30;   // bẫy thao tác: ~1 bẫy/8 rắn (nhiều); thường ~1/30
+    const W = B.W, H = B.H;
+    // Vùng tô màu: clone -> B.cloneColorMap; TỰ-GEN -> tự chia vùng từ mask (luôn bật "tự thiết kế màu").
+    const cloneImitate = !!(B.cloneColorMap && B.cloneKeep);
+    let genZoneMap = B.cloneColorMap || null;
+    if (!genZoneMap) {
+      const cellsSet = new Set();
+      if (mask && mask.size) mask.forEach(k => cellsSet.add(k)); else for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) cellsSet.add(x + "," + y);
+      const K = clamp(3 + Math.round(cellsSet.size / 130), 3, 6);
+      genZoneMap = spatialZones(cellsSet, W, H, K, COLOR_PALETTES[0].length);   // chia vùng liền mạch để rắn confine + tô mỗi vùng 1 màu
+    }
+    const params = { diff: 50, mother: $b("bMother").checked, fill: clamp(B.fillTarget, 50, 100) / 100, minL: clamp(B.minL, 2, 99), maxL: clamp(B.maxL, 0, 9999), pinned: B.clonePinned || null, zoneMap: genZoneMap, trap: trapMode };   // rắn GIỚI HẠN trong vùng -> màu liền mạch; trap -> genFull seed hàng đầu quay-ra
+    const dedup = true, startId = nextLibId();   // luôn bỏ trùng
     const wantParallel = typeof Worker !== "undefined" && count >= 8;   // luôn xử lý song song (tự fallback 1 luồng nếu bị chặn)
 
     B.generating = true; B.cancel = false;
@@ -716,7 +777,14 @@ self.onmessage = function (e) {
     // mỗi level ĐÚNG ĐIỂM + 100% fill -> id = startId + slot (map ĐÚNG vị trí curve, kể cả sinh lệch thứ tự).
     const onAccept = (lvl, slot) => {
       lvl.id = startId + slot; lvl.slot = slot;
-      autoColor(lvl.pieces, W, H, B.cloneColorMap || null);   // tô màu chuyên nghiệp (clone: theo vùng; tự build: theo rắn)
+      if (cloneImitate) applyCloneColors(lvl.pieces);            // clone KHÔNG tích -> bắt chước màu mẫu (như bản cũ, không bẫy)
+      else autoColor(lvl.pieces, W, H, genZoneMap, trapPerN);   // tự-gen / clone-tích -> tô mỗi VÙNG 1 màu + bẫy màu (mật độ theo mode)
+      if (trapMode) {   // bẫy thao tác: hàng mồi (genFull seed) + con bẫy CÙNG MÀU để trà trộn
+        const bait = []; let hasTrap = false;
+        lvl.pieces.forEach((p, i) => { if (p.bait || p.trap) { bait.push(i); if (p.trap) hasTrap = true; } });
+        if (bait.length) { const col = lvl.pieces[bait[0]].fixedColor; if (col >= 1) bait.forEach(i => lvl.pieces[i].fixedColor = col); }   // cả hàng + con quay-vô đồng MỘT màu
+        if (!hasTrap) injectDirTraps(lvl.pieces, W, H);   // genFull chưa dựng được bẫy -> thử post-process
+      }
       B.library.push(lvl); B.selection.add(lvl.id); made++;
       appendLibCard(lvl);
       $b("bProgBar").style.width = Math.round(made / count * 100) + "%";
@@ -744,7 +812,7 @@ self.onmessage = function (e) {
       $b("bProgInfo").textContent = errMsg
         ? "✗ Lỗi khi sinh: " + errMsg + " — mở Console (F12) xem chi tiết."
         : (cancelled ? "⛔ Đã hủy · " : `✓ Xong (${mode}) · `)
-          + `${made}/${count} level · ` + (range ? `độ khó trong [${range.min}–${range.max}]` : "độ khó ĐÚNG curve")
+          + `${made}/${count} level · ` + (trapMode ? "BẪY thao tác (hàng đầu quay ra + 1 con quay vô va chạm)" : range ? `độ khó trong [${range.min}–${range.max}]` : "độ khó ĐÚNG curve")
           + (cancelled && made < count ? ` · còn thiếu ${count - made} (bấm Sinh để vét tiếp)` : "");
       setTimeout(() => { $b("bProgWrap").style.display = "none"; }, 1600);
       try { saveLibrary(); renderLibrary(); } catch (e2) { console.error("[Thư viện] lỗi render:", e2); }
@@ -851,25 +919,34 @@ self.onmessage = function (e) {
     return s;
   }
 
-  // Tự chia LAYOUT thành K VÙNG LỚN theo không gian (k-means trên toạ độ ô) -> mỗi ô 1 zone id (1..K).
-  function spatialZones(paint, W, H, K) {
+  // Chia LAYOUT thành các VÙNG LỚN LIỀN MẠCH: BFS-Voronoi (lan theo ô KỀ từ K seed) -> mỗi vùng luôn liền mạch
+  // (khác k-means Euclid có thể tách rời). Phần mask rời thêm vùng mới. Gộp vùng nhỏ tới khi ≤ CAP màu.
+  function spatialZones(paint, W, H, K, CAP) {
+    const D4 = [[0, -1], [0, 1], [-1, 0], [1, 0]], inP = k => paint.has(k);
     const cells = []; paint.forEach(k => { const i = k.indexOf(","), x = +k.slice(0, i), y = +k.slice(i + 1); cells.push([x, y]); });
     if (cells.length < 2) return null;
-    K = Math.max(1, Math.min(K, cells.length));
+    K = Math.max(1, Math.min(K, cells.length)); CAP = CAP || 8;
     const d2 = (a, b) => (a[0] - b[0]) * (a[0] - b[0]) + (a[1] - b[1]) * (a[1] - b[1]);
-    const cent = [cells[Math.floor(Math.random() * cells.length)].slice()];   // seed xa nhau (farthest-point)
-    while (cent.length < K) { let best = cells[0], bd = -1; for (const c of cells) { let md = Infinity; for (const s of cent) md = Math.min(md, d2(c, s)); if (md > bd) { bd = md; best = c; } } cent.push(best.slice()); }
-    const asg = new Array(cells.length).fill(0);
-    for (let it = 0; it < 12; it++) {
-      let changed = false;
-      for (let i = 0; i < cells.length; i++) { let bi = 0, bd = Infinity; for (let j = 0; j < K; j++) { const dd = d2(cells[i], cent[j]); if (dd < bd) { bd = dd; bi = j; } } if (asg[i] !== bi) { asg[i] = bi; changed = true; } }
-      const sx = new Array(K).fill(0), sy = new Array(K).fill(0), cn = new Array(K).fill(0);
-      for (let i = 0; i < cells.length; i++) { const a = asg[i]; sx[a] += cells[i][0]; sy[a] += cells[i][1]; cn[a]++; }
-      for (let j = 0; j < K; j++) if (cn[j]) { cent[j][0] = sx[j] / cn[j]; cent[j][1] = sy[j] / cn[j]; }
-      if (!changed) break;
+    const seeds = [cells[Math.floor(Math.random() * cells.length)]];   // seed phân tán (farthest-point)
+    while (seeds.length < K) { let best = cells[0], bd = -1; for (const c of cells) { let md = Infinity; for (const s of seeds) md = Math.min(md, d2(c, s)); if (md > bd) { bd = md; best = c; } } seeds.push(best); }
+    const zm = Array.from({ length: H }, () => Array(W).fill(0));
+    const q = []; seeds.forEach((s, i) => { if (zm[s[1]][s[0]] === 0) { zm[s[1]][s[0]] = i + 1; q.push(s); } });
+    let head = 0;   // BFS đa nguồn theo ô kề -> vùng liền mạch
+    while (head < q.length) { const [x, y] = q[head++], z = zm[y][x]; for (const d of D4) { const nx = x + d[0], ny = y + d[1]; if (nx < 0 || nx >= W || ny < 0 || ny >= H || !inP(nx + "," + ny) || zm[ny][nx] !== 0) continue; zm[ny][nx] = z; q.push([nx, ny]); } }
+    let next = seeds.length + 1;   // phần rời chưa tới -> vùng mới (flood riêng)
+    for (const [sx, sy] of cells) { if (zm[sy][sx] !== 0) continue; const z = next++; zm[sy][sx] = z; const q2 = [[sx, sy]]; let h2 = 0; while (h2 < q2.length) { const [x, y] = q2[h2++]; for (const d of D4) { const nx = x + d[0], ny = y + d[1]; if (nx < 0 || nx >= W || ny < 0 || ny >= H || !inP(nx + "," + ny) || zm[ny][nx] !== 0) continue; zm[ny][nx] = z; q2.push([nx, ny]); } } }
+    // gộp vùng NHỎ vào vùng kề lớn nhất tới khi số vùng ≤ CAP (để mỗi vùng 1 màu riêng, không tái dùng)
+    const cellsOf = new Map(); for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) { const z = zm[y][x]; if (z > 0) { (cellsOf.get(z) || cellsOf.set(z, []).get(z)).push([x, y]); } }
+    while (cellsOf.size > CAP) {
+      let small = null, ss = Infinity; for (const [z, cs] of cellsOf) if (cs.length < ss) { ss = cs.length; small = z; }
+      const ac = new Map(); for (const [x, y] of cellsOf.get(small)) for (const d of D4) { const nx = x + d[0], ny = y + d[1]; if (nx < 0 || nx >= W || ny < 0 || ny >= H) continue; const z = zm[ny][nx]; if (z > 0 && z !== small) ac.set(z, (ac.get(z) || 0) + 1); }
+      let into = null, bc = -1; for (const [z, c] of ac) if (c > bc) { bc = c; into = z; }
+      if (into === null) { for (const [z, cs] of cellsOf) if (z !== small && (into === null || cs.length > cellsOf.get(into).length)) into = z; }   // đảo rời: gộp vào vùng lớn nhất
+      if (into === null) break;
+      for (const c of cellsOf.get(small)) { zm[c[1]][c[0]] = into; cellsOf.get(into).push(c); } cellsOf.delete(small);
     }
-    const zm = Array.from({ length: H }, () => Array(W).fill(-1));
-    for (let i = 0; i < cells.length; i++) zm[cells[i][1]][cells[i][0]] = asg[i] + 1;
+    let id = 1; const remap = new Map(); for (const z of cellsOf.keys()) remap.set(z, id++);   // đánh lại 1..R
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) { const z = zm[y][x]; if (z > 0) zm[y][x] = remap.get(z); }
     return zm;
   }
   // Lan màu: ô mask chưa có màu (lỗ/đệm) -> nhận màu của VÙNG MÀU gần nhất (BFS đa nguồn) -> mọi ô có 1 vùng.
@@ -887,6 +964,8 @@ self.onmessage = function (e) {
   // ---------- Nhân bản (clone): bắt chước layout + PHÂN VÙNG NGẦM theo màu + đổi màu random/level ----------
   const cellXY = c => Array.isArray(c) ? { x: c[0], y: c[1] } : { x: c.x, y: c.y };
   function cloneLevel(lvl) {
+    B.cloneSource = lvl;   // nhớ nguồn để re-clone khi đổi tích "Tự thiết kế màu"
+    { const wrap = $b("bCloneAutoColorWrap"); if (wrap) wrap.style.display = "";   }   // chỉ hiện nút tự-thiết-kế khi clone
     // ----- Layout: đệm 1 ô viền quanh hình (dịch +1, W+2/H+2) -> ô tô không chạm rìa; scale 100% -----
     B.W = lvl.w + 2; B.H = lvl.h + 2; $b("bW").value = B.W; $b("bH").value = B.H;
     B.scale = 1; $b("bScale").value = 100; $b("bScaleVal").textContent = "100";
@@ -904,14 +983,14 @@ self.onmessage = function (e) {
     B.diffMode = "range"; $b("bDiffMode").value = "range";
     B.diffMin = 0; B.diffMax = 100; $b("bDiffMin").value = 0; $b("bDiffMax").value = 100; syncDiffMode();
     // Vùng ngầm: rắn sinh ra bị giới hạn trong 1 vùng (không lấn vùng khác); autoColor tô mỗi vùng 1 màu.
-    B.clonePinned = null;
+    B.clonePinned = null; B.cloneKeep = false;
     const autoDesign = $b("bCloneAutoColor") && $b("bCloneAutoColor").checked;
-    if (autoDesign) {   // TỰ THIẾT KẾ: bỏ màu mẫu, chỉ mượn layout -> chia vài VÙNG LỚN theo không gian, ít màu
+    if (autoDesign) {   // TỰ THIẾT KẾ: bỏ màu mẫu, chỉ mượn layout -> chia vài VÙNG LỚN theo không gian, tô palette mới
       const K = clamp(2 + Math.round(B.paint.size / 150), 2, 5);
-      B.cloneColorMap = spatialZones(B.paint, B.W, B.H, K) || cm;
+      B.cloneColorMap = spatialZones(B.paint, B.W, B.H, K, COLOR_PALETTES[0].length) || cm;
       B.cloneColorDominant = -1; colorMode = "game"; if (typeof syncColorBtn === "function") syncColorBtn();
-    } else if (colored) {   // theo MÀU mẫu: mỗi vùng màu gốc = 1 vùng
-      B.cloneColorMap = cm; let mx = 0, domOld = -1; for (const k in freq) if (freq[k] > mx) { mx = freq[k]; domOld = +k; } B.cloneColorDominant = domOld; colorMode = "game"; if (typeof syncColorBtn === "function") syncColorBtn();
+    } else if (colored) {   // BẮT CHƯỚC màu mẫu: mỗi vùng GIỮ ĐÚNG màu gốc (cloneKeep)
+      B.cloneColorMap = cm; B.cloneKeep = true; colorMode = "game"; if (typeof syncColorBtn === "function") syncColorBtn();
     } else { B.cloneColorMap = null; B.cloneColorDominant = -1; }
     state.mode = "batch"; state.fromLibrary = null; syncModeUI();
     renderPreview(); updateCurveInfo();
@@ -930,9 +1009,80 @@ self.onmessage = function (e) {
   ];
   function _rgb(idx) { const h = (typeof GAME_COLORS !== "undefined" && GAME_COLORS[idx - 1]) || "#888888"; return [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)]; }
   function _cdist(a, b) { const x = _rgb(a), y = _rgb(b), dr = x[0] - y[0], dg = x[1] - y[1], db = x[2] - y[2]; return Math.sqrt(dr * dr + dg * dg + db * db); }
-  // Tô 1 level. zoneMap (clone) -> đơn vị = VÙNG MÀU (trong vùng cùng 1 màu); else -> đơn vị = từng RẮN.
-  function autoColor(pieces, W, H, zoneMap) {
+  // Con rắn có THOÁT NGAY được không (tia đầu thông tới rìa, không gặp rắn nào)?
+  function _movableNow(pieces, W, H) {
+    if (typeof DELTA === "undefined") return pieces.map(() => false);
+    const occ = new Map(); pieces.forEach((p, i) => { for (const c of p.cells) { const { x, y } = cellXY(c); occ.set(x + "," + y, i); } });
+    return pieces.map(p => {
+      if (p.mother) return false; const d = DELTA[p.dir]; if (!d) return false;
+      const h = cellXY(p.cells[0]); let x = h.x + d.x, y = h.y + d.y;
+      while (x >= 0 && y >= 0 && x < W && y < H) { if (occ.has(x + "," + y)) return false; x += d.x; y += d.y; }
+      return true;
+    });
+  }
+  // BẪY HƯỚNG: trong CỤM nhiều con ĐẦU QUAY RA, ĐẦU KỀ ĐẦU & CÙNG MÀU -> đảo ĐÚNG 1 con/vùng-màu thành
+  // quay VÔ (vẫn cùng màu -> trà trộn) -> thao tác nhanh dễ tap nhầm. Chỉ giữ nếu CẢ BÀN vẫn giải được.
+  function injectDirTraps(pieces, W, H) {
+    if (typeof solve !== "function" || typeof dirFromTo !== "function") return;
+    const mk = () => pieces.map((p, i) => ({ id: i + 1, dir: p.dir, cells: p.cells.map(c => { const { x, y } = cellXY(c); return { x, y }; }) }));
+    if (!solve(mk(), W, H).solvable) return;
+    const mv = _movableNow(pieces, W, H), D4 = [[0, -1], [0, 1], [-1, 0], [1, 0]];
+    const headAt = new Map(); pieces.forEach((p, i) => { if (!p.mother && mv[i]) { const h = cellXY(p.cells[0]); headAt.set(h.x + "," + h.y, i); } });
+    // ứng viên theo VÙNG-MÀU: con move-được, dài ≥3, ĐẦU kề ĐẦU con move-được khác CÙNG MÀU (cụm đầu trà trộn)
+    const byColor = new Map();
+    pieces.forEach((p, i) => {
+      if (p.mother || !mv[i] || p.cells.length < 3) return;
+      const h = cellXY(p.cells[0]);
+      for (const d of D4) { const o = headAt.get((h.x + d[0]) + "," + (h.y + d[1])); if (o !== undefined && o !== i && pieces[o].fixedColor === p.fixedColor) { const k = p.fixedColor; (byColor.get(k) || byColor.set(k, []).get(k)).push(i); break; } }
+    });
+    if (!byColor.size) { const g = []; for (let i = 0; i < pieces.length; i++) if (!pieces[i].mother && pieces[i].cells.length >= 3 && mv[i]) g.push(i); if (g.length) byColor.set(0, g); }   // fallback: gộp mọi con quay-ra vào 1 nhóm
+    for (const g of byColor.values()) {                 // MỖI VÙNG-MÀU đảo đúng 1 con -> "nhiều vùng đều có"
+      for (let n = g.length - 1; n > 0; n--) { const m = Math.floor(Math.random() * (n + 1)); const t = g[n]; g[n] = g[m]; g[m] = t; }
+      for (const i of g) {
+        const p = pieces[i], oldCells = p.cells, oldDir = p.dir;
+        const rev = p.cells.slice().reverse(), a = cellXY(rev[1]), b = cellXY(rev[0]), ndir = dirFromTo(a, b);
+        if (!ndir || ndir === oldDir) continue;
+        p.cells = rev; p.dir = ndir;                     // đảo: đầu sang đầu kia (quay VÔ)
+        const blocked = !_movableNow(pieces, W, H)[i];   // quay vô bị CHẶN ngay -> tap vào = VA CHẠM (bẫy thật)
+        if (blocked && solve(mk(), W, H).solvable) break;  // bẫy va chạm + bàn vẫn giải được -> giữ, sang vùng khác
+        p.cells = oldCells; p.dir = oldDir;              // không chặn (escape vô hại) hoặc hỏng -> hoàn lại, thử con khác
+      }
+    }
+  }
+  // BẪY MÀU: tô vài con KẸT trùng màu với con MOVE-được kề -> đánh lừa nhịp tap (lỡ tay tap con kẹt = mất sao).
+  function injectTraps(pieces, W, H, perN) {
+    perN = perN > 0 ? perN : 30;
+    const mv = _movableNow(pieces, W, H);
+    const occ = new Map(); pieces.forEach((p, i) => { for (const c of p.cells) { const { x, y } = cellXY(c); occ.set(x + "," + y, i); } });
+    const D4 = [[0, -1], [0, 1], [-1, 0], [1, 0]], cand = [];
+    pieces.forEach((p, i) => {
+      if (p.mother || mv[i] || !(p.fixedColor >= 1)) return;   // cần con KẸT, có màu
+      for (const c of p.cells) { const { x, y } = cellXY(c); let hit = false;
+        for (const d of D4) { const o = occ.get((x + d[0]) + "," + (y + d[1])); if (o !== undefined && o !== i && mv[o] && pieces[o].fixedColor >= 1 && pieces[o].fixedColor !== p.fixedColor) { cand.push([i, pieces[o].fixedColor]); hit = true; break; } }
+        if (hit) break;
+      }
+    });
+    if (!cand.length) return;
+    for (let n = cand.length - 1; n > 0; n--) { const m = Math.floor(Math.random() * (n + 1)); const t = cand[n]; cand[n] = cand[m]; cand[m] = t; }   // xáo trộn
+    const N = Math.max(1, Math.min(cand.length, 1 + Math.round(pieces.length / perN)));   // ~1 bẫy / perN rắn
+    for (let t = 0; t < N; t++) pieces[cand[t][0]].fixedColor = cand[t][1];   // con kẹt đội màu con move-được kề
+  }
+  // BẮT CHƯỚC màu mẫu (clone KHÔNG tích tự-thiết-kế) = y như bản cũ: remap màu gốc ngẫu nhiên/level,
+  // nhất quán trong level (cùng vùng màu gốc -> cùng màu mới). KHÔNG palette/bẫy.
+  function applyCloneColors(pieces) {
+    const cm = B.cloneColorMap; if (!cm || cm.length !== B.H || !cm[0] || cm[0].length !== B.W) return;
+    const offset = 1 + Math.floor(Math.random() * 47);
+    const remap = c => (c >= 1 && c <= 48) ? ((c - 1 + offset) % 48) + 1 : c;
+    for (const p of pieces) { if (p.mother) continue; const c0 = cellXY(p.cells[0]); const col = (cm[c0.y] || [])[c0.x]; if (col >= 1) p.fixedColor = remap(col); }
+  }
+  // Tô PALETTE mới (clone tích tự-thiết-kế / tự-build): chia/đọc vùng -> tô hài hoà, vùng kề tương phản + bẫy màu.
+  function autoColor(pieces, W, H, zoneMap, trapPerN) {
     if (!pieces.length || typeof GAME_COLORS === "undefined") return;
+    if (!zoneMap) {   // tự build: chia vài vùng lớn theo không gian để nhìn như game (khối màu lớn)
+      const paint = new Set(); pieces.forEach(p => { if (!p.mother) for (const c of p.cells) { const { x, y } = cellXY(c); paint.add(x + "," + y); } });
+      const K = clamp(3 + Math.round(paint.size / 130), 3, 6);
+      zoneMap = spatialZones(paint, W, H, K, COLOR_PALETTES[0].length);
+    }
     const pal = COLOR_PALETTES[Math.floor(Math.random() * COLOR_PALETTES.length)];
     const unitOf = [], occ = new Map();   // pieceIdx -> unitKey; "x,y" -> unitKey
     pieces.forEach((p, i) => {
@@ -947,16 +1097,18 @@ self.onmessage = function (e) {
     occ.forEach((u, k) => { const i = k.indexOf(","), x = +k.slice(0, i), y = +k.slice(i + 1);
       for (const d of [[0, -1], [0, 1], [-1, 0], [1, 0]]) { const nb = occ.get((x + d[0]) + "," + (y + d[1])); if (nb && nb !== u) { adj.get(u).add(nb); adj.get(nb).add(u); } }
     });
-    // greedy: đơn vị nhiều hàng xóm trước; chọn màu palette TƯƠNG PHẢN NHẤT với hàng xóm đã tô
+    // greedy: đơn vị nhiều hàng xóm trước; MỖI VÙNG 1 MÀU RIÊNG (không tái dùng) -> cùng màu ắt LIỀN MẠCH.
     const order = [...units].sort((a, b) => adj.get(b).size - adj.get(a).size);
-    const colorOf = new Map();
+    const colorOf = new Map(), used = new Set();
     for (const u of order) {
       const nbCols = []; for (const nb of adj.get(u)) if (colorOf.has(nb)) nbCols.push(colorOf.get(nb));
-      let best = pal[0], bestScore = -1;
-      for (const c of pal) { let minD = nbCols.length ? Infinity : 999; for (const nc of nbCols) minD = Math.min(minD, _cdist(c, nc)); if (minD > bestScore) { bestScore = minD; best = c; } }
-      colorOf.set(u, best);
+      let best = -1, bestScore = -1;
+      for (const c of pal) { if (used.has(c)) continue; let minD = nbCols.length ? Infinity : 999; for (const nc of nbCols) minD = Math.min(minD, _cdist(c, nc)); if (minD > bestScore) { bestScore = minD; best = c; } }
+      if (best < 0) { for (const c of pal) { let minD = nbCols.length ? Infinity : 999; for (const nc of nbCols) minD = Math.min(minD, _cdist(c, nc)); if (minD > bestScore) { bestScore = minD; best = c; } } }   // hết màu chưa dùng (vùng > palette) -> đành lấy tương phản nhất
+      colorOf.set(u, best); used.add(best);
     }
     pieces.forEach((p, i) => { if (unitOf[i] !== null) p.fixedColor = colorOf.get(unitOf[i]); });
+    injectTraps(pieces, W, H, trapPerN);   // chèn bẫy màu: con kẹt đội màu con move-được kề (đánh lừa nhịp tap)
   }
   function selectedLevels() {   // theo id tăng dần = đúng thứ tự đường cong (kể cả sinh lệch)
     return B.library.filter(l => B.selection.has(l.id)).sort((a, b) => a.id - b.id);
@@ -1229,14 +1381,16 @@ self.onmessage = function (e) {
     renderPreview();   // paint bắt đầu TRỐNG (vẽ từ đầu); dùng "Bật hết" nếu muốn full rồi xóa bớt
   }
   function applySize() {
-    B.cloneColorMap = null; B.clonePinned = null;   // đổi cỡ thủ công -> bỏ clone (khác kích thước)
+    B.cloneColorMap = null; B.clonePinned = null; B.cloneKeep = false; B.cloneSource = null;   // đổi cỡ thủ công -> bỏ clone
+    { const wrap = $b("bCloneAutoColorWrap"); if (wrap) wrap.style.display = "none"; }
     B.W = clamp(+$b("bW").value, 3, 60); B.H = clamp(+$b("bH").value, 3, 60);
     $b("bW").value = B.W; $b("bH").value = B.H;
     B.paint = new Set([...B.paint].filter(k => { const i = k.indexOf(","), x = +k.slice(0, i), y = +k.slice(i + 1); return x < B.W && y < B.H; }));
     renderPreview(); updateCurveInfo();
   }
 
-  $b("bLayoutType").addEventListener("change", () => { B.cloneColorMap = null; B.clonePinned = null; setLayoutType($b("bLayoutType").value); });   // đổi layout thủ công -> bỏ clone
+  $b("bLayoutType").addEventListener("change", () => { B.cloneColorMap = null; B.clonePinned = null; B.cloneKeep = false; B.cloneSource = null; const w = $b("bCloneAutoColorWrap"); if (w) w.style.display = "none"; setLayoutType($b("bLayoutType").value); });   // đổi layout thủ công -> bỏ clone
+  $b("bCloneAutoColor").addEventListener("change", () => { if (B.cloneSource) cloneLevel(B.cloneSource); });   // đổi tích -> dựng lại clone (bắt chước <-> tự thiết kế)
   $b("bApplySize").addEventListener("click", applySize);
   $b("bImgBtn").addEventListener("click", () => $b("bImg").click());
   $b("bImg").addEventListener("change", () => {
@@ -1258,9 +1412,8 @@ self.onmessage = function (e) {
   $b("bPaintFillHoles").addEventListener("click", () => { B.paint = autoFillHoles(B.paint, B.W, B.H); renderPreview(); });
 
   function syncDiffMode() {   // hiện/ẩn min-max vs đường cong theo kiểu độ khó
-    const range = B.diffMode === "range";
-    const rw = $b("bRangeWrap"); if (rw) rw.style.display = range ? "flex" : "none";
-    const cv = $b("bCurve"); if (cv) cv.style.opacity = range ? "0.35" : "1";
+    const rw = $b("bRangeWrap"); if (rw) rw.style.display = (B.diffMode === "range") ? "flex" : "none";   // min/max chỉ cho 'range'
+    const cv = $b("bCurve"); if (cv) cv.style.opacity = (B.diffMode === "curve") ? "1" : "0.35";          // chỉ 'curve' dùng đồ thị
   }
   $b("bDiffMode").addEventListener("change", () => { B.diffMode = $b("bDiffMode").value; syncDiffMode(); updateCurveInfo(); });
   $b("bDiffMin").addEventListener("input", () => { B.diffMin = clamp(+$b("bDiffMin").value, 0, 100); });
