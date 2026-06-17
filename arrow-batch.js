@@ -706,6 +706,7 @@ self.onmessage = function (e) {
     const wantParallel = typeof Worker !== "undefined" && count >= 8;   // luôn xử lý song song (tự fallback 1 luồng nếu bị chặn)
 
     B.generating = true; B.cancel = false;
+    if (typeof colorMode !== "undefined" && colorMode !== "game") { colorMode = "game"; if (typeof syncColorBtn === "function") syncColorBtn(); }   // tô màu chuyên nghiệp -> luôn Màu Game
     $b("bGenerate").disabled = true; $b("bCancel").style.display = "inline-block";
     $b("bProgWrap").style.display = "block"; $b("bProgBar").style.width = "0%";
     renderLibrary();   // hiện thư viện hiện có + đặt observer để appendLibCard hoạt động
@@ -715,7 +716,7 @@ self.onmessage = function (e) {
     // mỗi level ĐÚNG ĐIỂM + 100% fill -> id = startId + slot (map ĐÚNG vị trí curve, kể cả sinh lệch thứ tự).
     const onAccept = (lvl, slot) => {
       lvl.id = startId + slot; lvl.slot = slot;
-      if (B.cloneColorMap) applyCloneColors(lvl.pieces);   // nhân bản: tô màu theo vùng gốc
+      autoColor(lvl.pieces, W, H, B.cloneColorMap || null);   // tô màu chuyên nghiệp (clone: theo vùng; tự build: theo rắn)
       B.library.push(lvl); B.selection.add(lvl.id); made++;
       appendLibCard(lvl);
       $b("bProgBar").style.width = Math.round(made / count * 100) + "%";
@@ -890,23 +891,45 @@ self.onmessage = function (e) {
     $b("bProgInfo").textContent = `⧉ Nhân bản #${lvl.id}: layout ${B.W}×${B.H} (đệm viền)${colored ? " · PHÂN VÙNG theo màu" : " · không màu"} · độ khó 0–100. Bấm 🎲 Sinh.`;
     try { $b("bGenerate").scrollIntoView({ behavior: "smooth", block: "center" }); } catch (e) {}
   }
-  // Tô rắn mới theo bản đồ màu clone: mỗi rắn lấy màu gốc phủ NHIỀU Ô NHẤT trong các ô nó nằm.
-  // Tô màu cho 1 level clone: mỗi level 1 phép ĐỔI MÀU NGẪU NHIÊN riêng (dịch vòng 48 màu),
-  // nhưng nhất quán trong level: màu GỐC giống nhau -> màu mới giống nhau (cả rắn ghim lẫn rắn sinh).
-  function applyCloneColors(pieces) {
-    const cm = B.cloneColorMap; if (!cm || cm.length !== B.H || !cm[0] || cm[0].length !== B.W) return;
-    const offset = 1 + Math.floor(Math.random() * 47);   // ≠0 -> khác gốc; song ánh -> màu khác nhau vẫn khác nhau
-    const remap = c => (c >= 1 && c <= 48) ? ((c - 1 + offset) % 48) + 1 : c;
-    for (const p of pieces) {
-      let orig;
-      if (typeof p.fixedColor === "number" && p.fixedColor >= 1) orig = p.fixedColor;   // rắn GHIM: màu gốc của nó
-      else {   // rắn sinh mới: lấy màu gốc phủ nhiều ô nhất trong vùng
-        const freq = {}; let best = -1, bestN = 0;
-        for (const c of p.cells) { const { x, y } = cellXY(c); const col = (cm[y] || [])[x]; if (col >= 1) { freq[col] = (freq[col] || 0) + 1; if (freq[col] > bestN) { bestN = freq[col]; best = col; } } }
-        orig = best >= 1 ? best : (B.cloneColorDominant >= 1 ? B.cloneColorDominant : -1);
-      }
-      if (orig >= 1) p.fixedColor = remap(orig);   // cùng màu gốc -> cùng màu mới (theo offset của level này)
+  // ---------- Tô màu CHUYÊN NGHIỆP: bộ màu hài hoà + 2 đơn vị KỀ luôn khác & tương phản ----------
+  // Bộ palette cong-tay (mỗi bộ vài màu hài hoà, đủ tách biệt) — mỗi level random 1 bộ.
+  const COLOR_PALETTES = [
+    [1, 5, 7, 11, 14, 20, 17, 26],   // primary tươi (xanh·đỏ·vàng·lá·tím·cam·hồng·teal)
+    [1, 3, 26, 29, 11, 14, 38, 32],  // cool / đại dương
+    [5, 20, 7, 22, 17, 35, 14, 47],  // warm / hoàng hôn
+    [3, 6, 9, 12, 15, 18, 27, 33],   // pastel (sắc nhạt)
+    [11, 32, 35, 26, 40, 38, 7, 5],  // earth / rừng
+    [14, 16, 1, 26, 11, 20, 5, 47],  // tím-hồng-xanh phối
+  ];
+  function _rgb(idx) { const h = (typeof GAME_COLORS !== "undefined" && GAME_COLORS[idx - 1]) || "#888888"; return [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)]; }
+  function _cdist(a, b) { const x = _rgb(a), y = _rgb(b), dr = x[0] - y[0], dg = x[1] - y[1], db = x[2] - y[2]; return Math.sqrt(dr * dr + dg * dg + db * db); }
+  // Tô 1 level. zoneMap (clone) -> đơn vị = VÙNG MÀU (trong vùng cùng 1 màu); else -> đơn vị = từng RẮN.
+  function autoColor(pieces, W, H, zoneMap) {
+    if (!pieces.length || typeof GAME_COLORS === "undefined") return;
+    const pal = COLOR_PALETTES[Math.floor(Math.random() * COLOR_PALETTES.length)];
+    const unitOf = [], occ = new Map();   // pieceIdx -> unitKey; "x,y" -> unitKey
+    pieces.forEach((p, i) => {
+      if (p.mother) { unitOf[i] = null; return; }   // rắn mẹ giữ màu vàng riêng
+      const c0 = cellXY(p.cells[0]);
+      const key = zoneMap ? ("z" + ((zoneMap[c0.y] || [])[c0.x])) : ("s" + i);
+      unitOf[i] = key;
+      for (const c of p.cells) { const { x, y } = cellXY(c); occ.set(x + "," + y, key); }
+    });
+    const adj = new Map(); const units = new Set(unitOf.filter(u => u !== null));
+    units.forEach(u => adj.set(u, new Set()));
+    occ.forEach((u, k) => { const i = k.indexOf(","), x = +k.slice(0, i), y = +k.slice(i + 1);
+      for (const d of [[0, -1], [0, 1], [-1, 0], [1, 0]]) { const nb = occ.get((x + d[0]) + "," + (y + d[1])); if (nb && nb !== u) { adj.get(u).add(nb); adj.get(nb).add(u); } }
+    });
+    // greedy: đơn vị nhiều hàng xóm trước; chọn màu palette TƯƠNG PHẢN NHẤT với hàng xóm đã tô
+    const order = [...units].sort((a, b) => adj.get(b).size - adj.get(a).size);
+    const colorOf = new Map();
+    for (const u of order) {
+      const nbCols = []; for (const nb of adj.get(u)) if (colorOf.has(nb)) nbCols.push(colorOf.get(nb));
+      let best = pal[0], bestScore = -1;
+      for (const c of pal) { let minD = nbCols.length ? Infinity : 999; for (const nc of nbCols) minD = Math.min(minD, _cdist(c, nc)); if (minD > bestScore) { bestScore = minD; best = c; } }
+      colorOf.set(u, best);
     }
+    pieces.forEach((p, i) => { if (unitOf[i] !== null) p.fixedColor = colorOf.get(unitOf[i]); });
   }
   function selectedLevels() {   // theo id tăng dần = đúng thứ tự đường cong (kể cả sinh lệch)
     return B.library.filter(l => B.selection.has(l.id)).sort((a, b) => a.id - b.id);
