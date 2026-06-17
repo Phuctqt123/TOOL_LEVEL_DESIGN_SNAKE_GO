@@ -851,6 +851,27 @@ self.onmessage = function (e) {
     return s;
   }
 
+  // Tự chia LAYOUT thành K VÙNG LỚN theo không gian (k-means trên toạ độ ô) -> mỗi ô 1 zone id (1..K).
+  function spatialZones(paint, W, H, K) {
+    const cells = []; paint.forEach(k => { const i = k.indexOf(","), x = +k.slice(0, i), y = +k.slice(i + 1); cells.push([x, y]); });
+    if (cells.length < 2) return null;
+    K = Math.max(1, Math.min(K, cells.length));
+    const d2 = (a, b) => (a[0] - b[0]) * (a[0] - b[0]) + (a[1] - b[1]) * (a[1] - b[1]);
+    const cent = [cells[Math.floor(Math.random() * cells.length)].slice()];   // seed xa nhau (farthest-point)
+    while (cent.length < K) { let best = cells[0], bd = -1; for (const c of cells) { let md = Infinity; for (const s of cent) md = Math.min(md, d2(c, s)); if (md > bd) { bd = md; best = c; } } cent.push(best.slice()); }
+    const asg = new Array(cells.length).fill(0);
+    for (let it = 0; it < 12; it++) {
+      let changed = false;
+      for (let i = 0; i < cells.length; i++) { let bi = 0, bd = Infinity; for (let j = 0; j < K; j++) { const dd = d2(cells[i], cent[j]); if (dd < bd) { bd = dd; bi = j; } } if (asg[i] !== bi) { asg[i] = bi; changed = true; } }
+      const sx = new Array(K).fill(0), sy = new Array(K).fill(0), cn = new Array(K).fill(0);
+      for (let i = 0; i < cells.length; i++) { const a = asg[i]; sx[a] += cells[i][0]; sy[a] += cells[i][1]; cn[a]++; }
+      for (let j = 0; j < K; j++) if (cn[j]) { cent[j][0] = sx[j] / cn[j]; cent[j][1] = sy[j] / cn[j]; }
+      if (!changed) break;
+    }
+    const zm = Array.from({ length: H }, () => Array(W).fill(-1));
+    for (let i = 0; i < cells.length; i++) zm[cells[i][1]][cells[i][0]] = asg[i] + 1;
+    return zm;
+  }
   // Lan màu: ô mask chưa có màu (lỗ/đệm) -> nhận màu của VÙNG MÀU gần nhất (BFS đa nguồn) -> mọi ô có 1 vùng.
   function floodZones(cm, paint, W, H) {
     const q = []; for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) if (cm[y][x] >= 1) q.push([x, y]);
@@ -882,13 +903,19 @@ self.onmessage = function (e) {
     $b("bMother").checked = false;
     B.diffMode = "range"; $b("bDiffMode").value = "range";
     B.diffMin = 0; B.diffMax = 100; $b("bDiffMin").value = 0; $b("bDiffMax").value = 100; syncDiffMode();
-    // VÙNG NGẦM theo màu: rắn sinh ra bị giới hạn trong 1 vùng màu (không lấn vùng khác); màu remap random/level.
+    // Vùng ngầm: rắn sinh ra bị giới hạn trong 1 vùng (không lấn vùng khác); autoColor tô mỗi vùng 1 màu.
     B.clonePinned = null;
-    if (colored) { B.cloneColorMap = cm; let mx = 0, domOld = -1; for (const k in freq) if (freq[k] > mx) { mx = freq[k]; domOld = +k; } B.cloneColorDominant = domOld; colorMode = "game"; if (typeof syncColorBtn === "function") syncColorBtn(); }
-    else { B.cloneColorMap = null; B.cloneColorDominant = -1; }
+    const autoDesign = $b("bCloneAutoColor") && $b("bCloneAutoColor").checked;
+    if (autoDesign) {   // TỰ THIẾT KẾ: bỏ màu mẫu, chỉ mượn layout -> chia vài VÙNG LỚN theo không gian, ít màu
+      const K = clamp(2 + Math.round(B.paint.size / 150), 2, 5);
+      B.cloneColorMap = spatialZones(B.paint, B.W, B.H, K) || cm;
+      B.cloneColorDominant = -1; colorMode = "game"; if (typeof syncColorBtn === "function") syncColorBtn();
+    } else if (colored) {   // theo MÀU mẫu: mỗi vùng màu gốc = 1 vùng
+      B.cloneColorMap = cm; let mx = 0, domOld = -1; for (const k in freq) if (freq[k] > mx) { mx = freq[k]; domOld = +k; } B.cloneColorDominant = domOld; colorMode = "game"; if (typeof syncColorBtn === "function") syncColorBtn();
+    } else { B.cloneColorMap = null; B.cloneColorDominant = -1; }
     state.mode = "batch"; state.fromLibrary = null; syncModeUI();
     renderPreview(); updateCurveInfo();
-    $b("bProgInfo").textContent = `⧉ Nhân bản #${lvl.id}: layout ${B.W}×${B.H} (đệm viền)${colored ? " · PHÂN VÙNG theo màu" : " · không màu"} · độ khó 0–100. Bấm 🎲 Sinh.`;
+    $b("bProgInfo").textContent = `⧉ Nhân bản #${lvl.id}: layout ${B.W}×${B.H} (đệm viền) · ${autoDesign ? "TỰ THIẾT KẾ vùng màu" : (colored ? "phân vùng theo màu mẫu" : "không màu")} · độ khó 0–100. Bấm 🎲 Sinh.`;
     try { $b("bGenerate").scrollIntoView({ behavior: "smooth", block: "center" }); } catch (e) {}
   }
   // ---------- Tô màu CHUYÊN NGHIỆP: bộ màu hài hoà + 2 đơn vị KỀ luôn khác & tương phản ----------
