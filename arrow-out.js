@@ -313,6 +313,28 @@ function percDynamic(pieces, w, h) {
   return { perc, hidden: avg(hSeries) * 100, xa: avg(dSeries) * 100 };
 }
 const DIFF_TIERS = [[20,"Rất dễ","★"],[40,"Dễ","★★"],[60,"Vừa","★★★"],[80,"Khó","★★★★"],[101,"Siêu khó","★★★★★"]];
+// VÙNG RỜI: đếm các cụm ô KHÔNG liên thông (4-hướng) + độ XA giữa tâm các vùng -> bonus độ khó NHẸ.
+// Layout nhiều hình rời / map import có nhiều mảnh cách xa -> phải dõi mắt nhiều nơi -> khó hơn chút.
+// Map 1 vùng liền (đa số) -> bonus 0 (không đổi hành vi cũ). Tự động áp dụng cả khi sinh lẫn import.
+function regionSeparation(pieces, w, h) {
+  const occ = new Set(), cells = [];
+  for (const p of pieces) { if (!p || !p.cells) continue; for (const c of p.cells) { const x = c.x !== undefined ? c.x : c[0], y = c.y !== undefined ? c.y : c[1]; const k = x + "," + y; if (!occ.has(k)) { occ.add(k); cells.push([x, y]); } } }
+  if (!cells.length) return { regions: 0, bonus: 0 };
+  const comp = new Set(), cents = []; let R = 0;
+  for (const [sx, sy] of cells) {
+    const sk = sx + "," + sy; if (comp.has(sk)) continue;
+    R++; const q = [[sx, sy]]; comp.add(sk); let hi = 0, mx = 0, my = 0, cnt = 0;
+    while (hi < q.length) { const [x, y] = q[hi++]; mx += x; my += y; cnt++; for (const [dx, dy] of [[0,-1],[0,1],[-1,0],[1,0]]) { const nk = (x + dx) + "," + (y + dy); if (occ.has(nk) && !comp.has(nk)) { comp.add(nk); q.push([x + dx, y + dy]); } } }
+    cents.push([mx / cnt, my / cnt]);
+  }
+  if (R <= 1) return { regions: R, bonus: 0 };
+  const diag = Math.hypot(w, h) || 1;
+  let sumD = 0, pairs = 0; for (let i = 0; i < cents.length; i++) for (let j = i + 1; j < cents.length; j++) { sumD += Math.hypot(cents[i][0] - cents[j][0], cents[i][1] - cents[j][1]); pairs++; }
+  const spreadNorm = pairs ? Math.min(1, (sumD / pairs) / diag * 1.6) : 0;   // khoảng cách TB tâm vùng / đường chéo
+  const regTerm = Math.min(1, (R - 1) / 3);                                   // 2 vùng->0.33 · 4+ vùng->1
+  const bonus = Math.round(12 * regTerm * (0.4 + 0.6 * spreadNorm));          // tối đa ~12 điểm (tăng nhẹ)
+  return { regions: R, bonus };
+}
 function computeDifficulty(pieces, w, h) {
   if (!pieces.length) return { score: 0, tier: "—", emoji: "" };
   const a = analyzeSolve(pieces, w, h);
@@ -330,9 +352,10 @@ function computeDifficulty(pieces, w, h) {
   const raw = 0.30 * percScore + 0.30 * hiddenScore + 0.20 * moveScore + 0.10 * xaScore + 0.10 * snakeScore;
   // TRẦN KHẢ-CHƠI: map mỗi lượt đi được NHIỀU (moveScore thấp) thì dù nhìn rối vẫn DỄ chơi -> kéo điểm xuống.
   const playable = 0.6 + 0.4 * (moveScore / 100);   // 0.6 (lỏng) .. 1.0 (siết chặt)
-  const score = Math.round(raw * playable);
+  const sep = regionSeparation(pieces, w, h);   // bonus NHẸ theo số vùng rời + độ xa (layout tự do / import nhiều mảnh)
+  const score = Math.min(100, Math.round(raw * playable) + sep.bonus);
   const [, tier, emoji] = DIFF_TIERS.find(t => score < t[0]);
-  return { score, tier, emoji, breakdown: { snakeScore, moveScore, percScore, hiddenScore, xaScore } };
+  return { score, tier, emoji, regions: sep.regions, sepBonus: sep.bonus, breakdown: { snakeScore, moveScore, percScore, hiddenScore, xaScore } };
 }
 
 // ---------- Generator ----------
@@ -491,8 +514,8 @@ function autoGenerate(w, h, diff, wrap, longPref, mask, overflow, fillFixed, tar
 // ---------- Rắn mẹ (viền ôm sát hình) ----------
 // Bám-tường (luật bàn tay phải): đi trên các ô trống NGOÀI sát hình, luôn giữ hình bên phải,
 // nên lần đúng TOÀN BỘ đường bao ngoài thành một vòng khép kín — kể cả hình lõm phức tạp.
-function traceBorder(region, w, h) {
-  const inFree = (x, y) => x >= 0 && x < w && y >= 0 && y < h && !region.has(x + "," + y);
+function traceBorder(region, w, h, blocked) {
+  const inFree = (x, y) => x >= 0 && x < w && y >= 0 && y < h && !region.has(x + "," + y) && (!blocked || !blocked.has(x + "," + y));   // blocked = ô của hình/mẹ KHÁC -> viền không lấn sang
   // ô hình trên-trái nhất -> bắt đầu viền ở ô NGAY TRÊN nó, hướng Đông (hình nằm bên phải/dưới)
   let rx = null, ry = null;
   for (const k of region) { const i = k.indexOf(","), x = +k.slice(0, i), y = +k.slice(i + 1);
@@ -553,33 +576,51 @@ function motherFromLoop(loop, region, w, h) {
   }
   return null;
 }
-// Thêm `count` vòng rắn mẹ ÔM SÁT viền (lồng nhau).
+// Tách 1 tập ô thành các VÙNG LIÊN THÔNG (4-hướng) — mỗi vùng rời 1 (bộ) rắn mẹ riêng.
+function connectedComponents(region, w, h) {
+  const seen = new Set(), comps = [];
+  for (const k of region) {
+    if (seen.has(k)) continue;
+    const comp = [], q = [k]; seen.add(k);
+    while (q.length) { const cur = q.pop(); comp.push(cur); const i = cur.indexOf(","), x = +cur.slice(0, i), y = +cur.slice(i + 1);
+      for (const [dx, dy] of [[0,-1],[0,1],[-1,0],[1,0]]) { const nk = (x + dx) + "," + (y + dy); if (region.has(nk) && !seen.has(nk)) { seen.add(nk); q.push(nk); } } }
+    comps.push(comp);
+  }
+  return comps;
+}
+// Thêm `count` vòng rắn mẹ ÔM SÁT viền (lồng nhau) — cho TỪNG vùng liên thông rời nhau.
 // hugRegion = tập ô để ôm viền (ảnh: dùng MASK silhouette sạch). Không có -> dùng hợp các ô rắn.
 function buildMother(pieces, w, h, count, hugRegion) {
   if (count < 1) return [];
   if (!hugRegion && !pieces.length) return [];
-  const region = new Set(hugRegion || []);
-  if (!hugRegion) pieces.forEach(p => p.cells.forEach(c => region.add(c.x + "," + c.y)));
+  const full = new Set(hugRegion || []);
+  if (!hugRegion) pieces.forEach(p => p.cells.forEach(c => full.add(c.x + "," + c.y)));
+  if (!full.size) return [];
   const occ = new Set(); pieces.forEach(p => p.cells.forEach(c => occ.add(c.x + "," + c.y)));   // ô rắn (mother không được đè)
   let nid = Math.max(0, ...(pieces.length ? pieces.map(p => p.id) : [0])) + 1;
   const mothers = [];
-  for (let i = 1; i <= count; i++) {
-    const path = traceBorder(region, w, h);
-    if (!path || path.length < 4) break;
-    if (path.some(c => occ.has(c.x + "," + c.y))) break;   // an toàn (không xảy ra khi lòi ra = 0)
-    let cells = null, dir = null;
-    // MỎ THOÁT: thêm ô NGAY TRÊN ô đầu (path[0] ở ngay trên đỉnh hình) -> đầu chĩa LÊN ra ngoài, thoát chắc.
-    const sx = path[0].x, sy = path[0].y - 1, sk = sx + "," + sy;
-    const inPath = (x, y) => path.some(c => c.x === x && c.y === y);
-    if (sy >= 0 && !region.has(sk) && !occ.has(sk) && !inPath(sx, sy)) {
-      let clear = true;
-      for (let yy = sy - 1; yy >= 0; yy--) { if (region.has(sx + "," + yy) || inPath(sx, yy)) { clear = false; break; } }
-      if (clear) { cells = [{ x: sx, y: sy }, ...path]; dir = "up"; }   // cổ = path[0] ngay dưới -> đầu thẳng lên
+  const block = new Set(full);   // chặn TOÀN CỤC: mọi ô hình (tất cả vùng) + mẹ đã đặt -> ray không xuyên hình khác, không chồng
+  for (const comp of connectedComponents(full, w, h)) {   // mỗi VÙNG RỜI -> 1 (bộ) rắn mẹ riêng
+    const region = new Set(comp);   // viền bám RIÊNG vùng này
+    for (let i = 1; i <= count; i++) {
+      const others = block.size > region.size ? new Set([...block].filter(k => !region.has(k))) : null;   // hình/mẹ vùng khác -> viền tránh
+      const path = traceBorder(region, w, h, others);
+      if (!path || path.length < 4) break;
+      if (path.some(c => occ.has(c.x + "," + c.y))) break;   // an toàn (không xảy ra khi lòi ra = 0)
+      let cells = null, dir = null;
+      // MỎ THOÁT: thêm ô NGAY TRÊN ô đầu (path[0] ở ngay trên đỉnh hình) -> đầu chĩa LÊN ra ngoài, thoát chắc.
+      const sx = path[0].x, sy = path[0].y - 1, sk = sx + "," + sy;
+      const inPath = (x, y) => path.some(c => c.x === x && c.y === y);
+      if (sy >= 0 && !block.has(sk) && !occ.has(sk) && !inPath(sx, sy)) {
+        let clear = true;
+        for (let yy = sy - 1; yy >= 0; yy--) { if (block.has(sx + "," + yy) || inPath(sx, yy)) { clear = false; break; } }
+        if (clear) { cells = [{ x: sx, y: sy }, ...path]; dir = "up"; }   // cổ = path[0] ngay dưới -> đầu thẳng lên
+      }
+      if (!cells) { const m = motherFromLoop(path, block, w, h); if (!m) break; cells = m.cells; dir = m.dir; }   // dự phòng: cắt vòng (ray theo block toàn cục)
+      if (cells.some(c => occ.has(c.x + "," + c.y))) break;
+      cells.forEach(c => { region.add(c.x + "," + c.y); block.add(c.x + "," + c.y); });   // vòng kế ôm ngoài + chặn cho vùng khác
+      mothers.push({ id: nid++, dir, cells, mother: true });
     }
-    if (!cells) { const m = motherFromLoop(path, region, w, h); if (!m) break; cells = m.cells; dir = m.dir; }   // dự phòng: cắt vòng
-    if (cells.some(c => occ.has(c.x + "," + c.y))) break;
-    cells.forEach(c => region.add(c.x + "," + c.y));        // vòng kế ôm ngoài vòng này
-    mothers.push({ id: nid++, dir, cells, mother: true });
   }
   return mothers;
 }

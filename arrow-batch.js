@@ -12,7 +12,7 @@
 
   const B = state.batch = {
     layoutType: "rect", W: 20, H: 20, scale: 0.9,
-    maskImg: null, maskTainted: false, paint: new Set(), brush: 0, previewCell: 16,
+    maskImg: null, maskTainted: false, paint: new Set(), brush: 0, previewCell: 16, freeMask: null,
     curve: [{ t: 0, v: 12 }, { t: 1, v: 90 }],
     library: [], selection: new Set(), displayOrder: [],
     sort: "index", filter: "all",
@@ -122,6 +122,88 @@
     return out;
   }
   function fullMask(W, H) { const s = new Set(); for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) s.add(x + "," + y); return s; }
+  // LAYOUT TỰ DO: các ô của 1 hình (vuông/tròn/thoi/tam giác) tâm (cx,cy), bán kính r.
+  function shapeCells(type, cx, cy, r) {
+    const out = [], t1 = Math.max(1, Math.round(r * 0.4));
+    // ĐA GIÁC / SAO: dựng đỉnh (hệ tâm) 1 lần rồi point-in-polygon từng ô.
+    const regPoly = (n, rot) => { const v = []; for (let i = 0; i < n; i++) { const a = rot + i * 2 * Math.PI / n; v.push([Math.cos(a) * r, Math.sin(a) * r]); } return v; };
+    const starPoly = (n, inner) => { const v = []; for (let i = 0; i < n; i++) { const aO = -Math.PI / 2 + i * 2 * Math.PI / n, aI = aO + Math.PI / n; v.push([Math.cos(aO) * r, Math.sin(aO) * r], [Math.cos(aI) * r * inner, Math.sin(aI) * r * inner]); } return v; };
+    let poly = null;
+    if (type === "pentagon") poly = regPoly(5, -Math.PI / 2);
+    else if (type === "heptagon") poly = regPoly(7, -Math.PI / 2);
+    else if (type === "star5") poly = starPoly(5, 0.42);
+    else if (type === "star4") poly = starPoly(4, 0.42);
+    else if (type === "star6") poly = starPoly(6, 0.5);
+    else if (type === "trapezoid") poly = [[-r, r], [r, r], [r * 0.45, -r], [-r * 0.45, -r]];
+    else if (type === "parallelogram") poly = [[-r * 0.55, r], [r, r], [r * 0.55, -r], [-r, -r]];
+    const inPoly = (px, py, vs) => { let ins = false; for (let i = 0, j = vs.length - 1; i < vs.length; j = i++) { const xi = vs[i][0], yi = vs[i][1], xj = vs[j][0], yj = vs[j][1]; if (((yi > py) !== (yj > py)) && (px < (xj - xi) * (py - yi) / ((yj - yi) || 1e-9) + xi)) ins = !ins; } return ins; };
+    for (let y = cy - r; y <= cy + r; y++) for (let x = cx - r; x <= cx + r; x++) {
+      const dx = x - cx, dy = y - cy, d2 = dx * dx + dy * dy; let inS = false;
+      if (poly) inS = inPoly(dx, dy, poly);
+      else if (type === "square") inS = true;
+      else if (type === "circle") inS = d2 <= r * r + r * 0.6;
+      else if (type === "diamond") inS = Math.abs(dx) + Math.abs(dy) <= r;
+      else if (type === "triangle") { const half = ((y - (cy - r)) / (2 * r || 1)) * r; inS = Math.abs(dx) <= half + 0.5; }   // tam giác đỉnh trên
+      else if (type === "triDown") { const half = (((cy + r) - y) / (2 * r || 1)) * r; inS = Math.abs(dx) <= half + 0.5; }   // tam giác đỉnh dưới
+      else if (type === "hexagon") inS = Math.abs(dy) <= r && Math.abs(dx) <= r - Math.max(0, Math.abs(dy) - r * 0.5);   // lục giác (thót 2 đầu)
+      else if (type === "octagon") inS = Math.abs(dx) <= r && Math.abs(dy) <= r && Math.abs(dx) + Math.abs(dy) <= r * 1.5;   // bát giác
+      else if (type === "plus") inS = Math.abs(dx) <= t1 || Math.abs(dy) <= t1;   // chữ thập
+      else if (type === "exShape") inS = Math.abs(Math.abs(dx) - Math.abs(dy)) <= Math.max(1, r * 0.35);   // chữ X (2 đường chéo)
+      else if (type === "hbar") inS = Math.abs(dy) <= Math.max(1, Math.round(r * 0.5));   // thanh ngang
+      else if (type === "vbar") inS = Math.abs(dx) <= Math.max(1, Math.round(r * 0.5));   // thanh dọc
+      else if (type === "ring") inS = d2 <= r * r && d2 >= (r * 0.6) * (r * 0.6);   // vành khuyên
+      else if (type === "ell") inS = dx <= (-r + t1) || dy >= (r - t1);   // chữ L
+      else if (type === "tee") inS = dy <= (-r + t1) || Math.abs(dx) <= Math.max(1, Math.round(t1 * 0.7));   // chữ T
+      else if (type === "heart") { const tr = r * 0.5, ccy = -r * 0.28, apex = ccy + tr * 0.25, inL = (dx + r * 0.45) ** 2 + (dy - ccy) ** 2 <= tr * tr, inR = (dx - r * 0.45) ** 2 + (dy - ccy) ** 2 <= tr * tr; let inB = false; if (dy >= apex && dy <= r) { const tp = Math.pow((dy - apex) / ((r - apex) || 1), 1.3); inB = Math.abs(dx) <= r * (1 - tp); } inS = inL || inR || inB; }   // trái tim
+      else if (type === "crescent") inS = d2 <= r * r && ((dx - r * 0.5) ** 2 + dy * dy) > (r * 0.92) * (r * 0.92);   // trăng lưỡi liềm
+      else if (type === "drop") { const bcy = r * 0.25, br = r * 0.7, inBall = dx * dx + (dy - bcy) ** 2 <= br * br; let inTop = false; if (dy < bcy) { const tp = (bcy - dy) / ((bcy + r) || 1); inTop = Math.abs(dx) <= br * (1 - tp); } inS = inBall || inTop; }   // giọt nước
+      else if (type === "arrow") { if (dy <= 0) inS = Math.abs(dx) <= (dy + r); else inS = Math.abs(dx) <= Math.max(1, Math.round(r * 0.35)); }   // mũi tên lên
+      if (inS) out.push([x, y]);
+    }
+    return out;
+  }
+  // 1 ĐƠN VỊ hình: ĐẶC, hoặc RỖNG (viền) + 1 hình KHÁC bên trong (chừa khe) -> vẫn tính là 1 hình.
+  function freeUnit(types, type, cx, cy, r, hollow) {
+    const solid = shapeCells(type, cx, cy, r);
+    if (!hollow || r < 5) return solid;
+    const t = 2, inner = new Set(shapeCells(type, cx, cy, r - t).map(c => c[0] + "," + c[1]));
+    const ring = solid.filter(([x, y]) => !inner.has(x + "," + y));   // viền = đặc − lõi
+    const innerR = Math.floor((r - t) / 2);
+    if (innerR >= 2) {
+      const ic = shapeCells(types[rint(types.length)], cx, cy, innerR);   // hình bên trong (loại bất kỳ)
+      const rf = new Set(); for (const [x, y] of ring) for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) rf.add((x + dx) + "," + (y + dy));
+      const innerCells = ic.filter(([x, y]) => !rf.has(x + "," + y));   // chừa khe ≥1 ô với viền
+      if (innerCells.length >= 4) return ring.concat(innerCells);
+    }
+    return ring;
+  }
+  // Sinh nhiều hình KHÔNG CHẠM nhau. 2 kiểu: tâm tạo ĐA GIÁC ĐỀU (+tuỳ chọn 1 hình giữa) | RẢI ngẫu nhiên.
+  function genFreeShapes(W, H) {
+    const types = ["square", "circle", "diamond", "triangle", "triDown", "hexagon", "octagon", "plus", "hbar", "vbar",
+      "pentagon", "heptagon", "star5", "star4", "star6", "trapezoid", "parallelogram", "exShape", "ring", "ell", "tee", "heart", "crescent", "drop", "arrow"];
+    const occ = new Set(), forb = new Set();
+    const add = cells => { for (const [x, y] of cells) { occ.add(x + "," + y); for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) forb.add((x + dx) + "," + (y + dy)); } };
+    const fits = cells => cells.length >= 4 && !cells.some(([x, y]) => x < 0 || x >= W || y < 0 || y >= H || forb.has(x + "," + y));
+    const unit = (cx, cy, r) => freeUnit(types, types[rint(types.length)], cx, cy, r, Math.random() < 0.35);
+    let placed = 0;
+    if (Math.random() < 0.5) {
+      // ĐA GIÁC ĐỀU: tâm các hình = đỉnh đa giác đều quanh tâm bàn -> đường nối tâm là đa giác đều.
+      const N = 3 + rint(4), cx0 = W / 2, cy0 = H / 2, R = Math.min(W, H) * (0.30 + Math.random() * 0.08), a0 = Math.random() * Math.PI * 2;
+      const maxR = Math.max(2, Math.floor(R * Math.sin(Math.PI / N) - 1.5)), cap = Math.min(maxR, Math.floor(Math.min(W, H) / 4));
+      for (let i = 0; i < N; i++) { const a = a0 + i * 2 * Math.PI / N, cx = Math.round(cx0 + R * Math.cos(a)), cy = Math.round(cy0 + R * Math.sin(a)); for (let tr = 0; tr < 25; tr++) { const cells = unit(cx, cy, 2 + rint(Math.max(1, cap - 1))); if (fits(cells)) { add(cells); placed++; break; } } }
+      if (Math.random() < 0.55) { const cr = Math.max(2, Math.min(cap, Math.floor(R - maxR - 2))); for (let tr = 0; tr < 25; tr++) { const cells = unit(Math.round(cx0), Math.round(cy0), 2 + rint(Math.max(1, cr - 1))); if (fits(cells)) { add(cells); placed++; break; } } }   // hình GIỮA đa giác
+    } else {
+      // RẢI ngẫu nhiên 1..4 hình.
+      const nShapes = 1 + rint(4);
+      for (let i = 0; i < nShapes; i++) for (let tr = 0; tr < 50; tr++) {
+        const rMax = Math.max(2, Math.floor(Math.min(W, H) / (nShapes > 1 ? 4 : 3))), r = 2 + rint(Math.max(1, rMax - 1));
+        const cx = (r + 1) + rint(Math.max(1, W - 2 * (r + 1))), cy = (r + 1) + rint(Math.max(1, H - 2 * (r + 1)));
+        const cells = unit(cx, cy, r); if (fits(cells)) { add(cells); placed++; break; }
+      }
+    }
+    if (!placed) add(shapeCells("circle", W >> 1, H >> 1, Math.max(2, Math.floor(Math.min(W, H) / 3))).filter(([x, y]) => x >= 0 && x < W && y >= 0 && y < H));   // fallback: 1 hình giữa
+    return occ;
+  }
   // Lề (ô) còn trống quanh hình ở mức scale hiện tại.
   function marginCells() { return Math.round((1 - B.scale) * Math.min(B.W, B.H) / 2); }
   // mask vùng đặt rắn cho layout hiện tại (null = full bàn, chỉ khi rect & scale=100%).
@@ -138,6 +220,7 @@
       } catch (e) { B.maskTainted = true; return new Set(); }   // ảnh web bị CORS chặn đọc pixel
     }
     if (t === "paint") return scaleMask(new Set(B.paint), W, H, s);
+    if (t === "free") { if (!B.freeMask) B.freeMask = genFreeShapes(W, H); return new Set(B.freeMask); }   // nhiều hình rời (cố định cho cả batch; nút 🎲 đổi)
     if (t === "heart" || t === "star" || t === "donut" || t === "puppy") return scaleMask(maskShape(t, W, H), W, H, s);
     return null;
   }
@@ -632,8 +715,8 @@ self.onmessage = function (e) {
   function buildWorkerURL() {
     if (B.workerURL) return B.workerURL;
     const fns = [clamp, inBoard, solve, depMetrics, movableList, analyzeSolve, percRisk, percDynamic,
-      computeDifficulty, rint, shuffle, growSnake, snakeLen, generateMap, coverageCount, autoGenerate,
-      traceBorder, motherFromLoop, buildMother, dirFromTo, genFull, genLevelCore];
+      regionSeparation, computeDifficulty, rint, shuffle, growSnake, snakeLen, generateMap, coverageCount, autoGenerate,
+      traceBorder, motherFromLoop, connectedComponents, buildMother, dirFromTo, genFull, genLevelCore];
     let src = '"use strict";\n';
     src += "var DIRS=" + JSON.stringify(DIRS) + ";\n";
     src += "var DELTA=" + JSON.stringify(DELTA) + ";\n";
@@ -1008,7 +1091,51 @@ self.onmessage = function (e) {
     [14, 16, 1, 26, 11, 20, 5, 47],  // tím-hồng-xanh phối
   ];
   function _rgb(idx) { const h = (typeof GAME_COLORS !== "undefined" && GAME_COLORS[idx - 1]) || "#888888"; return [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)]; }
-  function _cdist(a, b) { const x = _rgb(a), y = _rgb(b), dr = x[0] - y[0], dg = x[1] - y[1], db = x[2] - y[2]; return Math.sqrt(dr * dr + dg * dg + db * db); }
+  // ---------- Màu CẢM NHẬN (CIELAB) + sinh palette theo LÝ THUYẾT MÀU ----------
+  const _labCache = {}, _hslCache = {};
+  function _lab(idx) {   // sRGB -> Lab (D65) -> dùng cho ΔE cảm nhận (đúng mắt người hơn RGB)
+    if (_labCache[idx]) return _labCache[idx];
+    const c = _rgb(idx).map(v => { v /= 255; return v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); });
+    let X = (c[0] * 0.4124 + c[1] * 0.3576 + c[2] * 0.1805) / 0.95047, Y = c[0] * 0.2126 + c[1] * 0.7152 + c[2] * 0.0722, Z = (c[0] * 0.0193 + c[1] * 0.1192 + c[2] * 0.9505) / 1.08883;
+    const f = t => t > 0.008856 ? Math.cbrt(t) : (7.787 * t + 16 / 116);
+    const fx = f(X), fy = f(Y), fz = f(Z);
+    return _labCache[idx] = [116 * fy - 16, 500 * (fx - fy), 200 * (fy - fz)];
+  }
+  function _cdist(a, b) { const x = _lab(a), y = _lab(b), dL = x[0] - y[0], da = x[1] - y[1], db = x[2] - y[2]; return Math.sqrt(dL * dL + da * da + db * db); }   // ΔE*ab (CIELAB) — KHOẢNG CÁCH CẢM NHẬN
+  function _hsl(idx) {   // hex -> HSL (cho phối màu theo hue)
+    if (_hslCache[idx]) return _hslCache[idx];
+    const [R, G, B] = _rgb(idx).map(v => v / 255), mx = Math.max(R, G, B), mn = Math.min(R, G, B), l = (mx + mn) / 2, d = mx - mn;
+    let h = 0, s = 0;
+    if (d) { s = l > 0.5 ? d / (2 - mx - mn) : d / (mx + mn); h = mx === R ? (G - B) / d + (G < B ? 6 : 0) : mx === G ? (B - R) / d + 2 : (R - G) / d + 4; h *= 60; }
+    return _hslCache[idx] = [h, s, l];
+  }
+  function _hueDist(a, b) { const d = Math.abs(a - b) % 360; return d > 180 ? 360 - d : d; }
+  // Sinh PALETTE theo lý thuyết màu từ 1 hue gốc ngẫu nhiên: analogous / bổ-túc / tam-giác / split / đơn-sắc.
+  // Lấy trong gamut 48 màu game (giữ tương thích export) nhưng phối hài hoà -> "vô hạn" mà không xấu.
+  function theoryPalette() {
+    if (typeof GAME_COLORS === "undefined") return COLOR_PALETTES[0];
+    const base = Math.random() * 360, mode = Math.floor(Math.random() * 5);
+    let hues;
+    if (mode === 0) hues = [base - 34, base - 17, base, base + 17, base + 34, base + 51];           // analogous (kề hue)
+    else if (mode === 1) hues = [base, base + 180, base + 18, base + 198, base - 18, base + 162];   // bổ túc (đối hue)
+    else if (mode === 2) hues = [base, base + 120, base + 240, base + 30, base + 150, base + 270];  // tam giác (120°)
+    else if (mode === 3) hues = [base, base + 150, base + 210, base + 25, base + 175, base + 185];  // split-complementary
+    else hues = [base, base, base, base, base, base];                                               // đơn sắc (đổi độ sáng)
+    hues = hues.map(h => ((h % 360) + 360) % 360);
+    const cand = []; for (let i = 1; i <= GAME_COLORS.length; i++) { const [h, s, l] = _hsl(i); cand.push({ i, h, s, l }); }
+    const used = new Set(), pal = [];
+    for (let k = 0; pal.length < 8 && k < 64; k++) {
+      const th = hues[k % hues.length], wantL = 0.30 + 0.45 * (pal.length / 7);   // trải độ sáng dần (đẹp + dễ tách)
+      let best = null, bs = 1e9;
+      for (const c of cand) {
+        if (used.has(c.i) || c.s < 0.18) continue;   // bỏ màu xám/nhạt tịt -> giữ tươi
+        const score = mode === 4 ? _hueDist(c.h, th) * 0.4 + Math.abs(c.l - wantL) * 140 : _hueDist(c.h, th) + Math.abs(c.l - wantL) * 12;
+        if (score < bs) { bs = score; best = c; }
+      }
+      if (best) { used.add(best.i); pal.push(best.i); }
+    }
+    return pal.length >= 3 ? pal : COLOR_PALETTES[Math.floor(Math.random() * COLOR_PALETTES.length)];
+  }
   // Con rắn có THOÁT NGAY được không (tia đầu thông tới rìa, không gặp rắn nào)?
   function _movableNow(pieces, W, H) {
     if (typeof DELTA === "undefined") return pieces.map(() => false);
@@ -1083,7 +1210,7 @@ self.onmessage = function (e) {
       const K = clamp(3 + Math.round(paint.size / 130), 3, 6);
       zoneMap = spatialZones(paint, W, H, K, COLOR_PALETTES[0].length);
     }
-    const pal = COLOR_PALETTES[Math.floor(Math.random() * COLOR_PALETTES.length)];
+    const pal = Math.random() < 0.8 ? theoryPalette() : COLOR_PALETTES[Math.floor(Math.random() * COLOR_PALETTES.length)];   // 80% phối theo lý thuyết màu, 20% bộ tuyển sẵn
     const unitOf = [], occ = new Map();   // pieceIdx -> unitKey; "x,y" -> unitKey
     pieces.forEach((p, i) => {
       if (p.mother) { unitOf[i] = null; return; }   // rắn mẹ giữ màu vàng riêng
@@ -1378,6 +1505,8 @@ self.onmessage = function (e) {
     B.layoutType = t;
     $b("bImageRow").style.display = t === "image" ? "block" : "none";
     $b("bPaintRow").style.display = t === "paint" ? "block" : "none";
+    { const fr = $b("bFreeRoll"); if (fr) fr.style.display = t === "free" ? "inline-block" : "none"; }
+    if (t === "free") B.freeMask = genFreeShapes(B.W, B.H);   // chọn layout tự do -> tung 1 bố cục hình rời mới
     renderPreview();   // paint bắt đầu TRỐNG (vẽ từ đầu); dùng "Bật hết" nếu muốn full rồi xóa bớt
   }
   function applySize() {
@@ -1386,10 +1515,12 @@ self.onmessage = function (e) {
     B.W = clamp(+$b("bW").value, 3, 60); B.H = clamp(+$b("bH").value, 3, 60);
     $b("bW").value = B.W; $b("bH").value = B.H;
     B.paint = new Set([...B.paint].filter(k => { const i = k.indexOf(","), x = +k.slice(0, i), y = +k.slice(i + 1); return x < B.W && y < B.H; }));
+    if (B.layoutType === "free") B.freeMask = genFreeShapes(B.W, B.H);   // đổi cỡ -> tung lại bố cục cho khớp bàn mới
     renderPreview(); updateCurveInfo();
   }
 
   $b("bLayoutType").addEventListener("change", () => { B.cloneColorMap = null; B.clonePinned = null; B.cloneKeep = false; B.cloneSource = null; const w = $b("bCloneAutoColorWrap"); if (w) w.style.display = "none"; setLayoutType($b("bLayoutType").value); });   // đổi layout thủ công -> bỏ clone
+  { const fr = $b("bFreeRoll"); if (fr) fr.addEventListener("click", () => { B.freeMask = genFreeShapes(B.W, B.H); renderPreview(); updateCurveInfo(); }); }   // tung lại bố cục hình rời
   $b("bCloneAutoColor").addEventListener("change", () => { if (B.cloneSource) cloneLevel(B.cloneSource); });   // đổi tích -> dựng lại clone (bắt chước <-> tự thiết kế)
   $b("bApplySize").addEventListener("click", applySize);
   $b("bImgBtn").addEventListener("click", () => $b("bImg").click());
