@@ -1342,7 +1342,7 @@ self.onmessage = function (e) {
 
   // ---------- Chơi level từ thư viện ----------
   // ---------- Trình sửa màu từng rắn (per-level) ----------
-  const CE = { lvl: null, sel: -1, cols: [], cv: null, ctx: null };
+  const CE = { lvl: null, sel: new Set(), cols: [], cv: null, ctx: null };
   function editorGeom() {
     const lvl = CE.lvl, S = CE.cv.width, W = lvl.w, H = lvl.h;
     const cell = S / Math.max(W, H), ox = (S - cell * W) / 2, oy = (S - cell * H) / 2;
@@ -1357,22 +1357,27 @@ self.onmessage = function (e) {
     for (let x = 0; x < W; x++) { ctx.beginPath(); ctx.moveTo(ox + (x + .5) * cell, oy + .5 * cell); ctx.lineTo(ox + (x + .5) * cell, oy + (H - .5) * cell); ctx.stroke(); }
     for (let y = 0; y < H; y++) { ctx.beginPath(); ctx.moveTo(ox + .5 * cell, oy + (y + .5) * cell); ctx.lineTo(ox + (W - .5) * cell, oy + (y + .5) * cell); ctx.stroke(); }
     lvl.pieces.forEach((p, i) => {
-      const ci = CE.cols[i], color = p.mother ? "#e8c25a" : (gameColor(ci) || pieceColor(i));
-      if (i === CE.sel) { ctx.save(); ctx.shadowColor = "#ffffff"; ctx.shadowBlur = cell * 0.95; }
+      const ci = CE.cols[i], color = p.mother ? "#e8c25a" : (gameColor(ci) || pieceColor(i)), on = CE.sel.has(i);
+      if (on) { ctx.save(); ctx.shadowColor = "#ffffff"; ctx.shadowBlur = cell * 0.95; }
       ctx.strokeStyle = color; ctx.fillStyle = color;
       ctx.lineWidth = Math.max(1, cell * 0.34); ctx.lineCap = "round"; ctx.lineJoin = "round";
       const pts = p.cells.map(c => ({ x: ox + (c[0] + .5) * cell, y: oy + (c[1] + .5) * cell }));
       const d = DELTA[p.dir], h = pts[0], t = cell * .5, b = cell * .3, px = -d.y, py = d.x;
       if (pts.length > 1) { ctx.beginPath(); ctx.moveTo(pts[pts.length - 1].x, pts[pts.length - 1].y); for (let k = pts.length - 2; k >= 0; k--) ctx.lineTo(pts[k].x, pts[k].y); ctx.stroke(); }
       ctx.beginPath(); ctx.moveTo(h.x + d.x * t, h.y + d.y * t); ctx.lineTo(h.x + px * b, h.y + py * b); ctx.lineTo(h.x - px * b, h.y - py * b); ctx.closePath(); ctx.fill();
-      if (i === CE.sel) ctx.restore();
+      if (on) ctx.restore();
     });
-    const cur = CE.sel >= 0 ? CE.cols[CE.sel] : -1;
+    let cur = -1;   // chỉ sáng ô màu khi MỌI con đang chọn cùng 1 màu
+    if (CE.sel.size) { const arr = [...CE.sel].map(i => CE.cols[i]); if (arr.every(c => c === arr[0])) cur = arr[0]; }
     const sw = $b("cEditSwatches"); if (sw) sw.querySelectorAll(".cedit-sw").forEach(b => b.classList.toggle("on", +b.dataset.ci === cur));
   }
   function updateEditorHint(msg) {
     const el = $b("cEditHint"); if (!el) return;
-    el.innerHTML = msg || (CE.sel >= 0 ? `Đang chọn <b>rắn #${CE.sel + 1}</b> — bấm 1 ô màu để đổi.` : `Bấm 1 <b>con rắn</b> để chọn, rồi bấm 1 ô màu.`);
+    if (msg) { el.innerHTML = msg; return; }
+    const n = CE.sel.size;
+    el.innerHTML = n
+      ? `Đang chọn <b>${n} rắn</b> — bấm 1 ô màu để đổi cả ${n}. Bấm con đã chọn để <b>bỏ</b>.`
+      : `Bấm 1 hay <b>nhiều con rắn</b> để chọn, rồi bấm 1 ô màu. Bấm con đã chọn để bỏ.`;
   }
   function onEditorCanvasClick(e) {
     if (!CE.lvl) return;
@@ -1381,12 +1386,14 @@ self.onmessage = function (e) {
     const cx = Math.floor((px - g.ox) / g.cell), cy = Math.floor((py - g.oy) / g.cell);
     let hit = -1;
     CE.lvl.pieces.forEach((p, i) => { if (p.mother) return; for (const c of p.cells) if (c[0] === cx && c[1] === cy) { hit = i; break; } });
-    if (hit >= 0) { CE.sel = hit; updateEditorHint(); drawEditor(); }
+    if (hit >= 0) { CE.sel.has(hit) ? CE.sel.delete(hit) : CE.sel.add(hit); updateEditorHint(); drawEditor(); }   // toggle: bấm lại = bỏ
   }
   function applySwatch(ci) {
-    if (CE.sel < 0) { updateEditorHint("⚠ Chọn 1 <b>con rắn</b> trước rồi mới chọn màu."); return; }
-    CE.cols[CE.sel] = ci; drawEditor();
+    if (!CE.sel.size) { updateEditorHint("⚠ Chọn ít nhất 1 <b>con rắn</b> trước rồi mới chọn màu."); return; }
+    CE.sel.forEach(i => { CE.cols[i] = ci; }); drawEditor();
   }
+  function selectAllEditor() { if (!CE.lvl) return; CE.sel.clear(); CE.lvl.pieces.forEach((p, i) => { if (!p.mother) CE.sel.add(i); }); updateEditorHint(); drawEditor(); }
+  function clearSelEditor() { CE.sel.clear(); updateEditorHint(); drawEditor(); }
   function randomizeEditor() {
     const lvl = CE.lvl; if (!lvl || typeof autoColor !== "function") return;
     const tmp = lvl.pieces.map(p => ({ dir: p.dir, cells: p.cells.map(c => [c[0], c[1]]), ...(p.mother ? { mother: true } : {}) }));
@@ -1408,6 +1415,8 @@ self.onmessage = function (e) {
           </div>
         </div>
         <div class="cedit-foot">
+          <button id="cEditSelAll" title="Chọn tất cả rắn (trừ rắn mẹ)">Chọn hết</button>
+          <button id="cEditSelNone" title="Bỏ chọn tất cả">Bỏ chọn</button>
           <button id="cEditRandom" title="Tô lại toàn bộ theo lý thuyết màu (ngẫu nhiên hài hoà)">🎲 Phối lại</button>
           <span class="cedit-spacer"></span>
           <button id="cEditCancel">Hủy</button>
@@ -1426,18 +1435,20 @@ self.onmessage = function (e) {
     bd.querySelector("#cEditCancel").addEventListener("click", closeColorEditor);
     bd.querySelector("#cEditSave").addEventListener("click", saveColorEditor);
     bd.querySelector("#cEditRandom").addEventListener("click", randomizeEditor);
+    bd.querySelector("#cEditSelAll").addEventListener("click", selectAllEditor);
+    bd.querySelector("#cEditSelNone").addEventListener("click", clearSelEditor);
     bd.addEventListener("click", e => { if (e.target === bd) closeColorEditor(); });
     document.addEventListener("keydown", e => { if (e.key === "Escape") { const x = $b("cEditBackdrop"); if (x && x.classList.contains("show")) closeColorEditor(); } });
   }
   function openColorEditor(lvl) {
     ensureColorEditor();
-    CE.lvl = lvl; CE.sel = -1;
+    CE.lvl = lvl; CE.sel.clear();
     CE.cols = lvl.pieces.map(p => (typeof p.fixedColor === "number" ? p.fixedColor : 0));
     $b("cEditId").textContent = lvl.id;
     updateEditorHint(); drawEditor();
     $b("cEditBackdrop").classList.add("show");
   }
-  function closeColorEditor() { const bd = $b("cEditBackdrop"); if (bd) bd.classList.remove("show"); CE.lvl = null; CE.sel = -1; }
+  function closeColorEditor() { const bd = $b("cEditBackdrop"); if (bd) bd.classList.remove("show"); CE.lvl = null; CE.sel.clear(); }
   function saveColorEditor() {
     const lvl = CE.lvl; if (!lvl) { closeColorEditor(); return; }
     lvl.pieces.forEach((p, i) => { const ci = CE.cols[i]; if (ci >= 1) p.fixedColor = ci; else delete p.fixedColor; });
