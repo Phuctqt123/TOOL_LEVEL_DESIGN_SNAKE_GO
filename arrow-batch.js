@@ -1532,7 +1532,11 @@ self.onmessage = function (e) {
   // Level -> object FORMAT GAME (Y-FLIP, Indices...) thuần. + bản pack (kèm metadata để re-import).
   // tên loại obstacle theo Type (tạm — chỉnh lại khi có bảng Type chính thức của game)
   const OBSTACLE_NAMES = { 0: "wooden box", 1: "black hole", 2: "linked arrow", 3: "corner", 4: "pipe" };
-  function metaOf(lvl) {   // khối metadata thống kê (tính lại từ chính các con rắn)
+  function layoutFromName(name) {   // "level_19_v1.json" -> "L19" (số ĐẦU TIÊN trong tên)
+    const m = name && String(name).match(/\d+/);
+    return m ? ("L" + parseInt(m[0], 10)) : null;
+  }
+  function metaOf(lvl, nameHint) {   // khối metadata thống kê (tính lại từ chính các con rắn)
     const live = normPieces(lvl.pieces).map((p, i) => (p.id = i + 1, p));
     const a = analyzeSolve(live, lvl.w, lvl.h);
     const sig = (typeof percDynamic === "function") ? percDynamic(live, lvl.w, lvl.h) : { perc: 0 };
@@ -1542,16 +1546,16 @@ self.onmessage = function (e) {
     const colors = new Set(); lvl.pieces.forEach(p => { if (typeof p.fixedColor === "number" && p.fixedColor >= 1) colors.add(p.fixedColor); });
     const obs = lvl.gameObstacles || [];
     return {
-      layout: "L" + lvl.id, shape: B.layoutType,
+      layout: layoutFromName(nameHint || lvl.fileName) || ("L" + lvl.id), shape: B.layoutType,   // theo SỐ trong tên file
       difficulty: lvl.score, snakeCount: lvl.pieces.length, colorCount: colors.size,
       XSize: lvl.w, YSize: lvl.h, turns: a.turns,
       percDyn: Math.round(sig.perc || 0), avgMoveRate: avg, minRate: mn, t1: a.t1Avail || 0,
       obstacleCount: obs.length, obstacles: [...new Set(obs.map(o => OBSTACLE_NAMES[o.Type] || ("type" + o.Type)))],
     };
   }
-  function gamePure(lvl) { return toGameLevel(lvl.pieces, lvl.w, lvl.h, lvl.tier !== "KẸT" ? lvl.score : 0, metaOf(lvl)); }
+  function gamePure(lvl, nameHint) { return toGameLevel(lvl.pieces, lvl.w, lvl.h, lvl.tier !== "KẸT" ? lvl.score : 0, metaOf(lvl, nameHint)); }
   function packLevelOf(lvl) {
-    return Object.assign(gamePure(lvl), {
+    return Object.assign(gamePure(lvl, lvl.fileName), {
       score: lvl.score, tier: lvl.tier, target: lvl.target,
       fillReal: lvl.fillReal, empty: lvl.empty, turns: lvl.turns, t1Pct: lvl.t1Pct, stuck: lvl.stuck,
       ...(lvl.fileName ? { fileName: lvl.fileName } : {})   // giữ tên file gốc qua pack round-trip
@@ -1570,7 +1574,7 @@ self.onmessage = function (e) {
       if (!/\.json$/i.test(name)) name += ".json";
       if (used.has(name)) { const base = name.replace(/\.json$/i, ""); let k = 2; while (used.has(`${base}_${k}.json`)) k++; name = `${base}_${k}.json`; }   // tránh trùng tên
       used.add(name);
-      files.push({ name, str: JSON.stringify(gamePure(lvl), null, 2) });
+      files.push({ name, str: JSON.stringify(gamePure(lvl, name), null, 2) });   // layout theo SỐ trong tên file đã resolve
       manifest.levels.push({ file: name, id: lvl.id, score: lvl.score, tier: lvl.tier, snakes: lvl.pieces.length, fillReal: lvl.fillReal, empty: lvl.empty, turns: lvl.turns, t1Pct: lvl.t1Pct, stuck: lvl.stuck });
     });
     files.push({ name: "manifest.json", str: JSON.stringify(manifest, null, 2) });
