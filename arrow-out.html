@@ -5,6 +5,22 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
 <title>Snake Go</title>
 <link rel="stylesheet" href="arrow-out.css" />
+<script>
+/* Đặt theme SỚM (tránh nháy nền) + lưu lựa chọn. Mặc định: light (nền trắng). */
+(function () {
+  try { document.documentElement.setAttribute("data-theme", localStorage.getItem("sg-theme") || "light"); }
+  catch (e) { document.documentElement.setAttribute("data-theme", "light"); }
+  document.addEventListener("DOMContentLoaded", function () {
+    var sw = document.getElementById("themeSwitch"); if (!sw) return;
+    function mark() { var cur = document.documentElement.getAttribute("data-theme");
+      sw.querySelectorAll("button").forEach(function (b) { b.classList.toggle("active", b.dataset.theme === cur); }); }
+    sw.addEventListener("click", function (e) { var b = e.target.closest("button[data-theme]"); if (!b) return;
+      document.documentElement.setAttribute("data-theme", b.dataset.theme);
+      try { localStorage.setItem("sg-theme", b.dataset.theme); } catch (er) {} mark(); });
+    mark();
+  });
+})();
+</script>
 </head>
 <body>
 <div class="wrap">
@@ -13,7 +29,18 @@
       <h1>Snake <span>Go</span></h1>
       <div class="sub">Công cụ sinh hàng loạt level — mũi tên dạng rắn nhiều ô</div>
     </div>
+    <div class="theme-switch" id="themeSwitch" title="Đổi nền/giao diện">
+      <button type="button" data-theme="light" title="Nền trắng">☀️</button>
+      <button type="button" data-theme="cream" title="Nền kem">🍦</button>
+      <button type="button" data-theme="dark" title="Nền tối">🌙</button>
+      <button type="button" data-theme="navy" title="Xanh đêm">🌌</button>
+    </div>
   </header>
+
+  <nav class="tabs" id="tabs">
+    <button type="button" class="tab" id="tabBatch">🎲 Sinh hàng loạt</button>
+    <button type="button" class="tab" id="tabPlay">🎮 Chơi</button>
+  </nav>
 
   <div class="board-area">
     <div class="statusbar">
@@ -48,11 +75,13 @@
 
   <div class="side">
     <div class="card">
-      <h2>Luật chơi</h2>
-      <div class="hint">
-        Mỗi con rắn có <b>hướng đầu cố định</b> và thân nhiều ô (có thể cong). Bấm → đầu đi thẳng ra rìa, thân trườn theo.
-        Thoát được khi tia đi của đầu <b>trống</b> (không vướng rắn khác, không vướng thân mình). Dọn sạch là thắng.
-      </div>
+      <h2><span class="h2-icon">📖</span> Luật chơi</h2>
+      <ul class="rules-list">
+        <li>Bấm con rắn → đầu đi thẳng ra rìa, thân trườn theo.</li>
+        <li>Thoát được khi tia đầu <b>không vướng</b> rắn khác / thân mình.</li>
+        <li>Dọn sạch tất cả với <b>ít nước nhất</b> — bí quyết là đúng thứ tự.</li>
+        <li>Bị chặn vẫn tính 1 nước đi.</li>
+      </ul>
     </div>
   </div>
 
@@ -61,7 +90,7 @@
     <!-- Cột trái: cấu hình -->
     <div class="batch-settings">
       <div class="card">
-        <h2>1 · Layout</h2>
+        <h2><span class="step-no">1</span> Layout</h2>
         <div class="row">
           <label class="fld" style="flex:2">Dạng layout
             <select id="bLayoutType">
@@ -120,7 +149,7 @@
       </div>
 
       <div class="card">
-        <h2>2 · Độ khó</h2>
+        <h2><span class="step-no">2</span> Độ khó</h2>
         <div class="row" style="margin-bottom:6px; align-items:flex-end">
           <label class="fld" style="flex:0 0 auto">Kiểu
             <select id="bDiffMode">
@@ -133,17 +162,16 @@
             <span class="fld" style="flex:0 0 auto">Max <input type="number" id="bDiffMax" min="0" max="100" value="100" style="width:64px" /></span>
           </label>
         </div>
-        <div class="hint" style="margin-bottom:6px">
-          <b>Đường cong</b>: kéo điểm chỉnh độ khó theo tiến trình (nhấp đúp = thêm · chuột phải = xóa). <b>Khoảng</b>: mọi level rơi vào [min–max]. <b>Bẫy thao tác</b>: độ khó tự do + nhồi NHIỀU bẫy màu (con kẹt đội màu nhóm move-được → lừa tap).
-        </div>
-        <canvas id="bCurve" width="300" height="160" class="curve-canvas"></canvas>
-        <div class="row" style="margin-top:8px">
-          <span class="hint">Preset:</span>
-          <button class="curve-preset" data-preset="linear">Tuyến tính</button>
-          <button class="curve-preset" data-preset="easein">Ease-in</button>
-          <button class="curve-preset" data-preset="scurve">S-curve</button>
-          <button class="curve-preset" data-preset="steps">Bậc thang</button>
-          <button class="curve-preset" data-preset="saw">Răng cưa</button>
+        <div id="bCurveSection">
+          <canvas id="bCurve" width="300" height="160" class="curve-canvas"></canvas>
+          <div class="row" style="margin-top:8px">
+            <span class="hint">Preset:</span>
+            <button class="curve-preset" data-preset="linear">Tuyến tính</button>
+            <button class="curve-preset" data-preset="easein">Ease-in</button>
+            <button class="curve-preset" data-preset="scurve">S-curve</button>
+            <button class="curve-preset" data-preset="steps">Bậc thang</button>
+            <button class="curve-preset" data-preset="saw">Răng cưa</button>
+          </div>
         </div>
         <div class="row" style="margin-top:10px">
           <label class="fld">Số level <input type="number" id="bCount" min="1" max="1000" value="300" /></label>
@@ -153,8 +181,7 @@
       </div>
 
       <div class="card">
-        <h2>3 · Tham số sinh</h2>
-        <p class="hint" style="margin:0 0 8px">Engine lấp đầy có bảo vệ solvable → nhanh, luôn giải được. Chỉ giữ map khớp <b>fill mục tiêu</b> (±3%, =100% thì ép kín) và điểm khó <b>ĐÚNG BẰNG</b> điểm trên đường cong (vét cạn, lặp tới khi đủ — bấm Hủy nếu một mức không ra). Hạ fill để chạm các mức khó thấp hơn.</p>
+        <h2><span class="step-no">3</span> Tham số sinh</h2>
         <div class="row" style="margin-top:4px">
           <label class="fld" style="flex:1" title="Tỉ lệ ô vùng chơi bị rắn phủ. 100 = ép kín tuyệt đối; thấp hơn = thưa hơn (map dễ hơn). Nhận khi fill thực trong ±3% mục tiêu.">Độ lấp đầy (fill): <b id="bFillVal">100</b>%
             <input type="range" id="bFill" min="50" max="100" value="100" /></label>
@@ -179,14 +206,14 @@
     <!-- Cột phải: preview + thư viện -->
     <div class="batch-work">
       <div class="card">
-        <h2>Xem trước layout</h2>
+        <h2><span class="h2-icon">👁️</span> Xem trước layout</h2>
         <div class="layout-preview-wrap"><canvas id="bPreview" class="layout-preview"></canvas></div>
         <div class="hint" style="margin-top:8px">💡 <b>Kéo ảnh thả vào bất kỳ đâu</b> trong chế độ Hàng loạt (từ máy hoặc từ web) — tự chuyển sang layout "Từ ảnh". Ảnh web sẽ được nạp qua proxy để đọc được pixel.</div>
       </div>
 
       <div class="card" id="bLibCard">
         <div class="lib-toolbar">
-          <h2 style="margin:0">Thư viện <span id="bLibCount" class="pill">0</span></h2>
+          <h2 style="margin:0"><span class="h2-icon">📚</span> Thư viện <span id="bLibCount" class="pill">0</span></h2>
           <div class="lib-tools">
             <label class="fld" style="flex:0 0 auto">Sắp xếp
               <select id="bSort">

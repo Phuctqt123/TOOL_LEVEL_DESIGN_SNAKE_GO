@@ -235,6 +235,30 @@ function analyzeSolve(pieces, w, h) {
   }
   return { turns: turnData.length, turnData, stuck, t1Avail, snakes: pieces.length };
 }
+// PACING TRONG MÀN: độ khó MỖI LƯỢT d(t)∈[0,1] (lượt siết/ép buộc = cao) + mô tả hình dạng
+// (Dồn đầu / Đỉnh giữa / Climax cuối / 2 đỉnh / Phẳng). Dùng để HIỂN THỊ pacing, không ảnh hưởng gen.
+function intraDifficulty(pieces, w, h) {
+  const a = analyzeSolve(pieces, w, h), T = a.turnData.length;
+  if (!T) return { d: [], T: 0, peak: 0, trend: 0, label: "—" };
+  const d = a.turnData.map(td => {
+    let v = 1 - (td.moved / Math.max(1, td.remaining));   // % rắn còn lại BỊ KẸT lượt này = độ siết
+    if (td.moved === 1 && td.remaining > 1) v = Math.min(1, v + 0.2);   // lượt ÉP BUỘC (chỉ 1 đường) -> spike
+    return Math.max(0, Math.min(1, v));
+  });
+  const mx = Math.max(...d), mn = Math.min(...d), mean = d.reduce((s, v) => s + v, 0) / T;
+  const argmax = d.indexOf(mx), peak = T > 1 ? argmax / (T - 1) : 0;
+  const avg = arr => arr.length ? arr.reduce((s, v) => s + v, 0) / arr.length : 0;
+  const trend = avg(d.slice(Math.ceil(T / 2))) - avg(d.slice(0, Math.floor(T / 2)));   // >0 căng dần · <0 dịu dần
+  let peaks = 0; for (let i = 0; i < T; i++) { const L = i > 0 ? d[i - 1] : -1, R = i < T - 1 ? d[i + 1] : -1; if (d[i] >= L && d[i] >= R && d[i] >= mean + 0.1) peaks++; }
+  let label;
+  if (T <= 2) label = "ngắn";
+  else if (mx - mn < 0.15) label = "Phẳng";
+  else if (peaks >= 2) label = "2 đỉnh";
+  else if (peak < 0.34) label = "Dồn đầu";
+  else if (peak > 0.66) label = "Climax cuối";
+  else label = "Đỉnh giữa";
+  return { d, T, peak, trend, label };
+}
 // Rủi ro thị giác thô trung bình mỗi rắn tại 1 trạng thái (raycast đầu -> kẻ chặn).
 function percRisk(pieces, w, h) {
   if (!pieces.length) return 0;
@@ -986,6 +1010,9 @@ function syncModeUI() {
   const pc = $("playControls"); if (pc) pc.style.display = batch ? "none" : "flex";
   const ph = $("playHint"); if (ph) ph.style.display = batch ? "none" : "block";
   const lpb = $("libPlayBar"); if (lpb) lpb.style.display = (play && state.fromLibrary != null) ? "flex" : "none";
+  const tp = $("tabPlay"), tb = $("tabBatch");   // tab active indicator
+  if (tp) tp.classList.toggle("tab-active", play);
+  if (tb) tb.classList.toggle("tab-active", batch);
 }
 
 function occupiedAt(x, y) {
