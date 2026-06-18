@@ -1663,21 +1663,25 @@ self.onmessage = function (e) {
     }
     return out;
   }
-  async function importZip(file) {
+  async function zipToLevels(file) {   // giải nén 1 ZIP -> { levels, skipped } (KHÔNG render)
+    const entries = await unzip(await file.arrayBuffer());
+    const td = new TextDecoder(), levels = [];
+    let skipped = 0;
+    for (const e of entries) {
+      if (e.name.endsWith("/") || !/\.json$/i.test(e.name)) continue;            // chỉ nhận .json
+      if (/(^|\/)manifest\.json$/i.test(e.name)) continue;                       // bỏ manifest
+      let data; try { data = JSON.parse(td.decode(e.bytes)); } catch { skipped++; continue; }
+      if (Array.isArray(data)) levels.push(...data);                             // file là mảng level
+      else if (isGameFormat(data) || Array.isArray(data.pieces)) levels.push(data);  // 1 level lẻ
+      else if (Array.isArray(data.levels)) levels.push(...data.levels);          // pack lồng
+      else skipped++;
+    }
+    return { levels, skipped };
+  }
+  async function importZip(file) {   // kéo-thả 1 .zip
     $b("bSelInfo").textContent = "⏳ Đang đọc ZIP…";
     try {
-      const entries = await unzip(await file.arrayBuffer());
-      const td = new TextDecoder(), levels = [];
-      let skipped = 0;
-      for (const e of entries) {
-        if (e.name.endsWith("/") || !/\.json$/i.test(e.name)) continue;            // chỉ nhận .json
-        if (/(^|\/)manifest\.json$/i.test(e.name)) continue;                       // bỏ manifest
-        let data; try { data = JSON.parse(td.decode(e.bytes)); } catch { skipped++; continue; }
-        if (Array.isArray(data)) levels.push(...data);                             // file là mảng level
-        else if (isGameFormat(data) || Array.isArray(data.pieces)) levels.push(data);  // 1 level lẻ
-        else if (Array.isArray(data.levels)) levels.push(...data.levels);          // pack lồng
-        else skipped++;
-      }
+      const { levels, skipped } = await zipToLevels(file);
       if (!levels.length) { $b("bSelInfo").textContent = "✗ ZIP không có level hợp lệ (cần file .json đúng format)."; return; }
       const added = ingestLevels(levels);
       saveLibrary(); renderLibrary();
@@ -1686,6 +1690,29 @@ self.onmessage = function (e) {
       $b("bSelInfo").textContent = "✗ Lỗi đọc ZIP: " + (err && err.message ? err.message : err);
       console.error("[Import ZIP]", err);
     }
+  }
+  // CHỌN NHIỀU FILE cùng lúc (.json và/hoặc .zip) -> gộp, ingest, render 1 lần.
+  async function importFiles(files) {
+    if (!files || !files.length) return;
+    if (files.length === 1) {   // 1 file: giữ nguyên thông báo chi tiết như cũ
+      const f = files[0];
+      return (/\.zip$/i.test(f.name) || f.type === "application/zip") ? importZip(f) : importPack(f);
+    }
+    $b("bSelInfo").textContent = `⏳ Đang import ${files.length} file…`;
+    let added = 0, skipped = 0, bad = 0;
+    for (const f of files) {
+      try {
+        if (/\.zip$/i.test(f.name) || f.type === "application/zip") {
+          const r = await zipToLevels(f); added += ingestLevels(r.levels); skipped += r.skipped;
+        } else {
+          let data; try { data = JSON.parse(await f.text()); } catch { bad++; continue; }
+          const arr = Array.isArray(data) ? data : (isGameFormat(data) ? [data] : data.levels);
+          if (Array.isArray(arr)) added += ingestLevels(arr); else bad++;
+        }
+      } catch (e) { bad++; console.error("[import]", f.name, e); }
+    }
+    saveLibrary(); renderLibrary();
+    $b("bSelInfo").textContent = `✓ Đã import ${added} level từ ${files.length} file` + (skipped ? ` · bỏ ${skipped} mục` : "") + (bad ? ` · lỗi ${bad} file` : "");
   }
 
   // ---------- Nạp ảnh: file máy + kéo từ web ----------
@@ -1807,8 +1834,7 @@ self.onmessage = function (e) {
   $b("bExportZip").addEventListener("click", exportZip);
   $b("bImportBtn").addEventListener("click", () => $b("bImportPack").click());
   $b("bImportPack").addEventListener("change", () => {
-    const f = $b("bImportPack").files[0];
-    if (f) { if (/\.zip$/i.test(f.name) || f.type === "application/zip") importZip(f); else importPack(f); }
+    importFiles([...$b("bImportPack").files]);   // hỗ trợ chọn NHIỀU file cùng lúc
     $b("bImportPack").value = "";
   });
 
