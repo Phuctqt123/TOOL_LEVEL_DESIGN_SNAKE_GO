@@ -1553,7 +1553,8 @@ self.onmessage = function (e) {
   function packLevelOf(lvl) {
     return Object.assign(gamePure(lvl), {
       score: lvl.score, tier: lvl.tier, target: lvl.target,
-      fillReal: lvl.fillReal, empty: lvl.empty, turns: lvl.turns, t1Pct: lvl.t1Pct, stuck: lvl.stuck
+      fillReal: lvl.fillReal, empty: lvl.empty, turns: lvl.turns, t1Pct: lvl.t1Pct, stuck: lvl.stuck,
+      ...(lvl.fileName ? { fileName: lvl.fileName } : {})   // giữ tên file gốc qua pack round-trip
     });
   }
 
@@ -1562,9 +1563,13 @@ self.onmessage = function (e) {
     if (!sel.length) { $b("bSelInfo").textContent = "Chưa chọn level nào để export."; return; }
     const pad = Math.max(3, String(sel.length).length);
     const manifest = { generatedBy: "Arrow Out batch", format: "game (XSize/YSize/Arrows[Indices]/Colors/metadata, Y-flip)", count: sel.length, board: { w: B.W, h: B.H }, layout: B.layoutType, levels: [] };
-    const files = [];
+    const files = [], used = new Set();
     sel.forEach((lvl, i) => {
-      const name = "level" + String(i + 1).padStart(pad, "0") + ".json";
+      // GIỮ TÊN GỐC nếu level được import (lvl.fileName); chưa có (level tự sinh) -> levelNNN.json
+      let name = lvl.fileName || ("level" + String(i + 1).padStart(pad, "0") + ".json");
+      if (!/\.json$/i.test(name)) name += ".json";
+      if (used.has(name)) { const base = name.replace(/\.json$/i, ""); let k = 2; while (used.has(`${base}_${k}.json`)) k++; name = `${base}_${k}.json`; }   // tránh trùng tên
+      used.add(name);
       files.push({ name, str: JSON.stringify(gamePure(lvl), null, 2) });
       manifest.levels.push({ file: name, id: lvl.id, score: lvl.score, tier: lvl.tier, snakes: lvl.pieces.length, fillReal: lvl.fillReal, empty: lvl.empty, turns: lvl.turns, t1Pct: lvl.t1Pct, stuck: lvl.stuck });
     });
@@ -1607,6 +1612,7 @@ self.onmessage = function (e) {
         fillReal, empty: Math.max(0, area - covered), turns: a.turns,
         t1Pct: live.length ? Math.round(a.t1Avail / live.length * 100) : 0, stuck: a.stuck,
         target: o.target, pieces, id,
+        ...((o._srcName || o.fileName) ? { fileName: o._srcName || o.fileName } : {}),   // giữ tên file gốc -> export cùng tên
         ...(obstacles.length ? { gameObstacles: obstacles } : {}),   // giữ Obstacles import được để re-export không mất
       });
       B.selection.add(id); added++;
@@ -1624,6 +1630,7 @@ self.onmessage = function (e) {
       let data; try { data = JSON.parse(fr.result); } catch { $b("bSelInfo").textContent = "✗ File JSON không hợp lệ"; return; }
       const arr = Array.isArray(data) ? data : (isGameFormat(data) ? [data] : data.levels);   // 1 level game lẻ / mảng / pack
       if (!Array.isArray(arr)) { $b("bSelInfo").textContent = "✗ Không thấy level nào"; return; }
+      if (isGameFormat(data)) data._srcName = file.name;   // 1 file = 1 level -> giữ tên gốc
       const added = ingestLevels(arr);
       saveLibrary(); renderLibrary();
       $b("bSelInfo").textContent = `✓ Đã import ${added} level`;
@@ -1672,7 +1679,7 @@ self.onmessage = function (e) {
       if (/(^|\/)manifest\.json$/i.test(e.name)) continue;                       // bỏ manifest
       let data; try { data = JSON.parse(td.decode(e.bytes)); } catch { skipped++; continue; }
       if (Array.isArray(data)) levels.push(...data);                             // file là mảng level
-      else if (isGameFormat(data) || Array.isArray(data.pieces)) levels.push(data);  // 1 level lẻ
+      else if (isGameFormat(data) || Array.isArray(data.pieces)) { data._srcName = (e.name.split(/[\\/]/).pop() || e.name); levels.push(data); }  // 1 level lẻ -> giữ tên
       else if (Array.isArray(data.levels)) levels.push(...data.levels);          // pack lồng
       else skipped++;
     }
@@ -1707,6 +1714,7 @@ self.onmessage = function (e) {
         } else {
           let data; try { data = JSON.parse(await f.text()); } catch { bad++; continue; }
           const arr = Array.isArray(data) ? data : (isGameFormat(data) ? [data] : data.levels);
+          if (isGameFormat(data)) data._srcName = f.name;   // 1 file = 1 level -> giữ tên gốc
           if (Array.isArray(arr)) added += ingestLevels(arr); else bad++;
         }
       } catch (e) { bad++; console.error("[import]", f.name, e); }
