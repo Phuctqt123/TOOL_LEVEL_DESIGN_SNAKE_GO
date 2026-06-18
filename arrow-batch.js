@@ -1007,9 +1007,10 @@ self.onmessage = function (e) {
       + (pac && pac.T ? `\nPacing: ${pac.label} · ${pac.T} lượt (sparkline: dễ=xanh, khó=đỏ)` : "");
     const act = document.createElement("div"); act.className = "lc-actions";
     const playB = document.createElement("button"); playB.textContent = "▶"; playB.title = "Chơi"; playB.addEventListener("click", () => playLibrary(lvl.id));
+    const colB = document.createElement("button"); colB.textContent = "🎨"; colB.title = "Sửa màu từng rắn của level này"; colB.addEventListener("click", () => openColorEditor(lvl));
     const cloneB = document.createElement("button"); cloneB.textContent = "⧉"; cloneB.title = "Nhân bản: tạo hàng loạt cùng layout + độ khó ±3 + màu theo vùng"; cloneB.addEventListener("click", () => cloneLevel(lvl));
     const delB = document.createElement("button"); delB.textContent = "🗑"; delB.className = "danger"; delB.title = "Xóa"; delB.addEventListener("click", () => deleteLevel(lvl.id));
-    act.append(playB, cloneB, delB); card.appendChild(act);
+    act.append(playB, colB, cloneB, delB); card.appendChild(act);
     return card;
   }
   function renderLibrary() {
@@ -1340,6 +1341,113 @@ self.onmessage = function (e) {
   }
 
   // ---------- Chơi level từ thư viện ----------
+  // ---------- Trình sửa màu từng rắn (per-level) ----------
+  const CE = { lvl: null, sel: -1, cols: [], cv: null, ctx: null };
+  function editorGeom() {
+    const lvl = CE.lvl, S = CE.cv.width, W = lvl.w, H = lvl.h;
+    const cell = S / Math.max(W, H), ox = (S - cell * W) / 2, oy = (S - cell * H) / 2;
+    return { S, W, H, cell, ox, oy };
+  }
+  function drawEditor() {
+    const lvl = CE.lvl, ctx = CE.ctx; if (!lvl) return;
+    const { S, W, H, cell, ox, oy } = editorGeom();
+    ctx.clearRect(0, 0, S, S);
+    ctx.fillStyle = "#0e1218"; ctx.fillRect(0, 0, S, S);   // nền tối -> thấy màu rõ
+    ctx.strokeStyle = "rgba(255,255,255,0.08)"; ctx.lineWidth = Math.max(0.5, cell * 0.04);
+    for (let x = 0; x < W; x++) { ctx.beginPath(); ctx.moveTo(ox + (x + .5) * cell, oy + .5 * cell); ctx.lineTo(ox + (x + .5) * cell, oy + (H - .5) * cell); ctx.stroke(); }
+    for (let y = 0; y < H; y++) { ctx.beginPath(); ctx.moveTo(ox + .5 * cell, oy + (y + .5) * cell); ctx.lineTo(ox + (W - .5) * cell, oy + (y + .5) * cell); ctx.stroke(); }
+    lvl.pieces.forEach((p, i) => {
+      const ci = CE.cols[i], color = p.mother ? "#e8c25a" : (gameColor(ci) || pieceColor(i));
+      if (i === CE.sel) { ctx.save(); ctx.shadowColor = "#ffffff"; ctx.shadowBlur = cell * 0.95; }
+      ctx.strokeStyle = color; ctx.fillStyle = color;
+      ctx.lineWidth = Math.max(1, cell * 0.34); ctx.lineCap = "round"; ctx.lineJoin = "round";
+      const pts = p.cells.map(c => ({ x: ox + (c[0] + .5) * cell, y: oy + (c[1] + .5) * cell }));
+      const d = DELTA[p.dir], h = pts[0], t = cell * .5, b = cell * .3, px = -d.y, py = d.x;
+      if (pts.length > 1) { ctx.beginPath(); ctx.moveTo(pts[pts.length - 1].x, pts[pts.length - 1].y); for (let k = pts.length - 2; k >= 0; k--) ctx.lineTo(pts[k].x, pts[k].y); ctx.stroke(); }
+      ctx.beginPath(); ctx.moveTo(h.x + d.x * t, h.y + d.y * t); ctx.lineTo(h.x + px * b, h.y + py * b); ctx.lineTo(h.x - px * b, h.y - py * b); ctx.closePath(); ctx.fill();
+      if (i === CE.sel) ctx.restore();
+    });
+    const cur = CE.sel >= 0 ? CE.cols[CE.sel] : -1;
+    const sw = $b("cEditSwatches"); if (sw) sw.querySelectorAll(".cedit-sw").forEach(b => b.classList.toggle("on", +b.dataset.ci === cur));
+  }
+  function updateEditorHint(msg) {
+    const el = $b("cEditHint"); if (!el) return;
+    el.innerHTML = msg || (CE.sel >= 0 ? `Đang chọn <b>rắn #${CE.sel + 1}</b> — bấm 1 ô màu để đổi.` : `Bấm 1 <b>con rắn</b> để chọn, rồi bấm 1 ô màu.`);
+  }
+  function onEditorCanvasClick(e) {
+    if (!CE.lvl) return;
+    const r = CE.cv.getBoundingClientRect(), g = editorGeom();
+    const px = (e.clientX - r.left) * (CE.cv.width / r.width), py = (e.clientY - r.top) * (CE.cv.height / r.height);
+    const cx = Math.floor((px - g.ox) / g.cell), cy = Math.floor((py - g.oy) / g.cell);
+    let hit = -1;
+    CE.lvl.pieces.forEach((p, i) => { if (p.mother) return; for (const c of p.cells) if (c[0] === cx && c[1] === cy) { hit = i; break; } });
+    if (hit >= 0) { CE.sel = hit; updateEditorHint(); drawEditor(); }
+  }
+  function applySwatch(ci) {
+    if (CE.sel < 0) { updateEditorHint("⚠ Chọn 1 <b>con rắn</b> trước rồi mới chọn màu."); return; }
+    CE.cols[CE.sel] = ci; drawEditor();
+  }
+  function randomizeEditor() {
+    const lvl = CE.lvl; if (!lvl || typeof autoColor !== "function") return;
+    const tmp = lvl.pieces.map(p => ({ dir: p.dir, cells: p.cells.map(c => [c[0], c[1]]), ...(p.mother ? { mother: true } : {}) }));
+    autoColor(tmp, lvl.w, lvl.h, null, 30);
+    CE.cols = tmp.map(p => (typeof p.fixedColor === "number" ? p.fixedColor : 0));
+    drawEditor();
+  }
+  function ensureColorEditor() {
+    if ($b("cEditBackdrop")) return;
+    const bd = document.createElement("div"); bd.id = "cEditBackdrop"; bd.className = "cedit-backdrop";
+    bd.innerHTML = `
+      <div class="cedit-modal" role="dialog" aria-modal="true">
+        <div class="cedit-head"><h3>🎨 Sửa màu rắn — Level #<span id="cEditId"></span></h3><button id="cEditClose" class="cedit-x" title="Đóng">✕</button></div>
+        <div class="cedit-body">
+          <div class="cedit-canvas-wrap"><canvas id="cEditCv" width="440" height="440"></canvas></div>
+          <div class="cedit-side">
+            <div class="cedit-hint" id="cEditHint"></div>
+            <div class="cedit-swatches" id="cEditSwatches"></div>
+          </div>
+        </div>
+        <div class="cedit-foot">
+          <button id="cEditRandom" title="Tô lại toàn bộ theo lý thuyết màu (ngẫu nhiên hài hoà)">🎲 Phối lại</button>
+          <span class="cedit-spacer"></span>
+          <button id="cEditCancel">Hủy</button>
+          <button id="cEditSave" class="primary">Lưu</button>
+        </div>
+      </div>`;
+    document.body.appendChild(bd);
+    const sw = bd.querySelector("#cEditSwatches");
+    for (let i = 1; i <= GAME_COLORS.length; i++) {
+      const b = document.createElement("button"); b.className = "cedit-sw"; b.style.background = gameColor(i); b.title = "Màu " + i + " · " + gameColor(i); b.dataset.ci = i;
+      b.addEventListener("click", () => applySwatch(i)); sw.appendChild(b);
+    }
+    CE.cv = bd.querySelector("#cEditCv"); CE.ctx = CE.cv.getContext("2d");
+    CE.cv.addEventListener("click", onEditorCanvasClick);
+    bd.querySelector("#cEditClose").addEventListener("click", closeColorEditor);
+    bd.querySelector("#cEditCancel").addEventListener("click", closeColorEditor);
+    bd.querySelector("#cEditSave").addEventListener("click", saveColorEditor);
+    bd.querySelector("#cEditRandom").addEventListener("click", randomizeEditor);
+    bd.addEventListener("click", e => { if (e.target === bd) closeColorEditor(); });
+    document.addEventListener("keydown", e => { if (e.key === "Escape") { const x = $b("cEditBackdrop"); if (x && x.classList.contains("show")) closeColorEditor(); } });
+  }
+  function openColorEditor(lvl) {
+    ensureColorEditor();
+    CE.lvl = lvl; CE.sel = -1;
+    CE.cols = lvl.pieces.map(p => (typeof p.fixedColor === "number" ? p.fixedColor : 0));
+    $b("cEditId").textContent = lvl.id;
+    updateEditorHint(); drawEditor();
+    $b("cEditBackdrop").classList.add("show");
+  }
+  function closeColorEditor() { const bd = $b("cEditBackdrop"); if (bd) bd.classList.remove("show"); CE.lvl = null; CE.sel = -1; }
+  function saveColorEditor() {
+    const lvl = CE.lvl; if (!lvl) { closeColorEditor(); return; }
+    lvl.pieces.forEach((p, i) => { const ci = CE.cols[i]; if (ci >= 1) p.fixedColor = ci; else delete p.fixedColor; });
+    if (typeof colorMode !== "undefined" && colorMode !== "game") { colorMode = "game"; if (typeof syncColorBtn === "function") syncColorBtn(); }
+    saveLibrary();
+    const grid = $b("bLibGrid");   // vẽ lại đúng thumbnail của level này
+    if (grid) grid.querySelectorAll("canvas").forEach(c => { if (c._level === lvl) { drawThumb(c, lvl); c._drawn = true; } });
+    closeColorEditor();
+  }
+
   function playLibrary(id) {
     const lvl = B.library.find(l => l.id === id); if (!lvl) return;
     state.fromLibrary = id;
