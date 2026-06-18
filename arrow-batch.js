@@ -699,6 +699,13 @@
     const d = computeDifficulty(all, W, H);
     if (d.tier === "KẸT") return null;
     const a = analyzeSolve(all, W, H);
+    // ĐỈNH-KHÓ-TRONG-MÀN: ép khoảnh khắc khó nhất (chấm đỏ sparkline) rơi vào vùng muốn -> loại nếu lệch.
+    let pac = null;
+    if (params && params.intraPeak && typeof intraDifficulty === "function") {
+      pac = intraDifficulty(all, W, H);
+      const b = params.intraPeak;
+      if (pac.T >= 3 && (pac.peak < b.min || pac.peak > b.max)) return null;
+    }
     const area = mask ? mask.size : W * H;
     let covered = 0; for (const p of all) for (const c of p.cells) if (!mask || mask.has(c.x + "," + c.y)) covered++;
     const fillReal = area ? Math.round(covered / area * 100) : 0;
@@ -708,6 +715,7 @@
       fillReal, empty: Math.max(0, area - covered), turns: a.turns,
       t1Pct: all.length ? Math.round(a.t1Avail / all.length * 100) : 0, stuck: a.stuck,
       diffDelta,
+      ...(pac && !(params && params.trap) ? { _pac: pac } : {}),   // pacing đã đo sẵn (đỡ tính lại ở thẻ); trap đảo hướng sau -> để thẻ tự tính lại
       ...(params && params.perLevelZones && params.zoneMap ? { zoneMap: params.zoneMap } : {}),   // vùng màu RIÊNG của level (để onAccept tô, rồi xoá)
       pieces: all.map(p => ({ dir: p.dir, cells: p.cells.map(c => [c.x, c.y]), ...(p.mother ? { mother: true } : {}), ...(p.fixedColor >= 1 ? { fixedColor: p.fixedColor } : {}), ...(p.bait ? { bait: true } : {}), ...(p.trap ? { trap: true } : {}) })),
     };
@@ -736,7 +744,7 @@ self.onmessage = function (e) {
   function buildWorkerURL() {
     if (B.workerURL) return B.workerURL;
     const fns = [clamp, inBoard, solve, depMetrics, movableList, analyzeSolve, percRisk, percDynamic,
-      regionSeparation, computeDifficulty, rint, shuffle, growSnake, snakeLen, generateMap, coverageCount, autoGenerate,
+      regionSeparation, intraDifficulty, computeDifficulty, rint, shuffle, growSnake, snakeLen, generateMap, coverageCount, autoGenerate,
       traceBorder, motherFromLoop, connectedComponents, buildMother, dirFromTo, spatialZones, normalizeZones, cutZones, genFull, genLevelCore];
     let src = '"use strict";\n';
     src += "var DIRS=" + JSON.stringify(DIRS) + ";\n";
@@ -862,7 +870,9 @@ self.onmessage = function (e) {
     const cloneImitate = !!(B.cloneColorMap && B.cloneKeep);
     const genZoneMap = B.cloneColorMap || null;
     const perLevelZones = !genZoneMap;   // không phải clone -> mỗi level 1 cách chia vùng riêng
-    const params = { diff: 50, mother: $b("bMother").checked, fill: clamp(B.fillTarget, 50, 100) / 100, minL: clamp(B.minL, 2, 99), maxL: clamp(B.maxL, 0, 9999), pinned: B.clonePinned || null, zoneMap: genZoneMap, perLevelZones, trap: trapMode };   // rắn GIỚI HẠN trong vùng -> màu liền mạch; trap -> genFull seed hàng đầu quay-ra
+    const IP_BAND = { early: { min: 0, max: 0.42 }, mid: { min: 0.33, max: 0.67 }, late: { min: 0.55, max: 1 } };
+    const intraPeak = IP_BAND[$b("bIntraPeak") ? $b("bIntraPeak").value : ""] || null;   // ép vị trí đỉnh-khó-trong-màn (chấm đỏ sparkline)
+    const params = { diff: 50, mother: $b("bMother").checked, fill: clamp(B.fillTarget, 50, 100) / 100, minL: clamp(B.minL, 2, 99), maxL: clamp(B.maxL, 0, 9999), pinned: B.clonePinned || null, zoneMap: genZoneMap, perLevelZones, trap: trapMode, intraPeak };   // rắn GIỚI HẠN trong vùng -> màu liền mạch; trap -> genFull seed hàng đầu quay-ra
     const dedup = true, startId = nextLibId();   // luôn bỏ trùng
     const wantParallel = typeof Worker !== "undefined" && count >= 8;   // luôn xử lý song song (tự fallback 1 luồng nếu bị chặn)
 

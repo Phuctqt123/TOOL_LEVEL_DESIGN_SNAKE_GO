@@ -190,6 +190,16 @@
           <label class="fld" title="Độ dài TỐI THIỂU của rắn ở các pha đặt chính. Bước lấp cuối (đạt fill) vẫn có thể ngắn hơn.">Dài tối thiểu <input type="number" id="bMinL" min="2" max="99" value="2" style="width:70px" /></label>
           <label class="fld" title="Trần độ dài rắn. 0 = tự động / KHÔNG giới hạn cứng. Nhập số lớn = gần như không giới hạn (rắn dài tùy ý trong bàn).">Dài tối đa <input type="number" id="bMaxL" min="0" max="9999" value="0" style="width:70px" /></label>
         </div>
+        <div class="row" style="margin-top:8px; align-items:flex-end">
+          <label class="fld" title="Điều khiển KHOẢNH KHẮC KHÓ NHẤT khi giải 1 màn (chấm đỏ trên sparkline mỗi thẻ) rơi vào nước thứ mấy. 'Cuối màn' = nước siết nhất ở gần cuối ván. Chỉ giữ map đạt đúng vùng → sinh CHẬM hơn (vét nhiều hơn).">Đỉnh khó trong màn
+            <select id="bIntraPeak">
+              <option value="">Tự nhiên (không ép)</option>
+              <option value="early">Dồn đầu màn</option>
+              <option value="mid">Giữa màn</option>
+              <option value="late">Cuối màn (climax)</option>
+            </select>
+          </label>
+        </div>
         <div class="row" style="align-items:center">
           <label class="chk" title="Thêm 1 viền rắn mẹ ôm sát hình"><input type="checkbox" id="bMother" /> Rắn mẹ (viền ôm)</label>
           <label class="chk" id="bCloneAutoColorWrap" style="display:none" title="Khi NHÂN BẢN (⧉): bỏ qua màu mẫu, chỉ mượn LAYOUT; tự chia vài VÙNG LỚN (mỗi vùng 1 màu) rồi tô. (Tự-gen luôn tự thiết kế màu nên nút này chỉ hiện khi clone.)"><input type="checkbox" id="bCloneAutoColor" /> Tự thiết kế màu (clone)</label>
