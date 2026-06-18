@@ -18,7 +18,7 @@
     sort: "index", filter: "all",
     fillTarget: 100, minL: 2, maxL: 0,   // fill 50–100 (=100 ép kín); minL/maxL độ dài rắn (maxL 0 = auto)
     diffMode: "curve", diffMin: 0, diffMax: 100,   // độ khó: 'curve' | 'range' (min..max; mặc định 0–100 = sao cũng được)
-    cloneColorMap: null, cloneColorDominant: -1, clonePinned: null, cloneKeep: false, cloneSource: null,   // nhân bản: bản đồ màu; cloneKeep = bắt chước màu gốc
+    cloneColorMap: null, cloneColorDominant: -1, clonePinned: null, cloneKeep: false, cloneExact: false, cloneSource: null,   // nhân bản: bản đồ màu; cloneKeep = bắt chước màu gốc; cloneExact = giữ NGUYÊN màu (không xoay hue)
     generating: false, cancel: false, dragIdx: -1,
     workerURL: null, activeWorkers: null, cancelParallel: null,
   };
@@ -684,7 +684,7 @@
       if (!arr || arr.length < 2) continue;
       let cov = 0; for (const p of arr) cov += p.cells.length;   // rắn chỉ nằm trong mask -> cov = ô đã phủ
       const fillReal = fullArea ? Math.round(cov / fullArea * 100) : 0;
-      if (wantFill >= 100 ? cov !== fullArea : Math.abs(fillReal - wantFill) > 3) continue;   // fill chưa khớp -> loại
+      if (wantFill >= 100 ? fillReal < 97 : Math.abs(fillReal - wantFill) > 3) continue;   // fill=100 -> nhận 97–100% (nhanh hơn nhiều); khác -> ±3%
       const pre = computeDifficulty(arr, W, H);
       if (pre.tier === "KẸT") continue;   // genFull đảm bảo solvable nên gần như không xảy ra
       const dd = target ? Math.abs(pre.score - target) : 0;
@@ -1147,7 +1147,7 @@ self.onmessage = function (e) {
   const cellXY = c => Array.isArray(c) ? { x: c[0], y: c[1] } : { x: c.x, y: c.y };
   function cloneLevel(lvl) {
     B.cloneSource = lvl;   // nhớ nguồn để re-clone khi đổi tích "Tự thiết kế màu"
-    { const wrap = $b("bCloneAutoColorWrap"); if (wrap) wrap.style.display = "";   }   // chỉ hiện nút tự-thiết-kế khi clone
+    { const wrap = $b("bCloneAutoColorWrap"); if (wrap) wrap.style.display = ""; const w2 = $b("bCloneKeepColorWrap"); if (w2) w2.style.display = ""; }   // hiện 2 nút màu khi clone
     // ----- Layout: đệm 1 ô viền quanh hình (dịch +1, W+2/H+2) -> ô tô không chạm rìa; scale 100% -----
     B.W = lvl.w + 2; B.H = lvl.h + 2; $b("bW").value = B.W; $b("bH").value = B.H;
     B.scale = 1; $b("bScale").value = 100; $b("bScaleVal").textContent = "100";
@@ -1165,18 +1165,19 @@ self.onmessage = function (e) {
     B.diffMode = "range"; $b("bDiffMode").value = "range";
     B.diffMin = 0; B.diffMax = 100; $b("bDiffMin").value = 0; $b("bDiffMax").value = 100; syncDiffMode();
     // Vùng ngầm: rắn sinh ra bị giới hạn trong 1 vùng (không lấn vùng khác); autoColor tô mỗi vùng 1 màu.
-    B.clonePinned = null; B.cloneKeep = false;
-    const autoDesign = $b("bCloneAutoColor") && $b("bCloneAutoColor").checked;
+    B.clonePinned = null; B.cloneKeep = false; B.cloneExact = false;
+    const keepColor = $b("bCloneKeepColor") && $b("bCloneKeepColor").checked;   // GIỮ NGUYÊN màu gốc, chỉ clone cách sắp xếp
+    const autoDesign = !keepColor && $b("bCloneAutoColor") && $b("bCloneAutoColor").checked;
     if (autoDesign) {   // TỰ THIẾT KẾ: bỏ màu mẫu, chỉ mượn layout -> chia vài VÙNG LỚN theo không gian, tô palette mới
       const K = clamp(2 + Math.round(B.paint.size / 150), 2, 5);
       B.cloneColorMap = spatialZones(B.paint, B.W, B.H, K, COLOR_PALETTES[0].length) || cm;
       B.cloneColorDominant = -1; colorMode = "game"; if (typeof syncColorBtn === "function") syncColorBtn();
-    } else if (colored) {   // BẮT CHƯỚC màu mẫu: mỗi vùng GIỮ ĐÚNG màu gốc (cloneKeep)
-      B.cloneColorMap = cm; B.cloneKeep = true; colorMode = "game"; if (typeof syncColorBtn === "function") syncColorBtn();
+    } else if (colored) {   // BẮT CHƯỚC màu mẫu: mỗi vùng GIỮ ĐÚNG màu gốc; keepColor -> giữ NGUYÊN (không xoay hue)
+      B.cloneColorMap = cm; B.cloneKeep = true; B.cloneExact = keepColor; colorMode = "game"; if (typeof syncColorBtn === "function") syncColorBtn();
     } else { B.cloneColorMap = null; B.cloneColorDominant = -1; }
     state.mode = "batch"; state.fromLibrary = null; syncModeUI();
     renderPreview(); updateCurveInfo();
-    $b("bProgInfo").textContent = `⧉ Nhân bản #${lvl.id}: layout ${B.W}×${B.H} (đệm viền) · ${autoDesign ? "TỰ THIẾT KẾ vùng màu" : (colored ? "phân vùng theo màu mẫu" : "không màu")} · độ khó 0–100. Bấm 🎲 Sinh.`;
+    $b("bProgInfo").textContent = `⧉ Nhân bản #${lvl.id}: layout ${B.W}×${B.H} (đệm viền) · ${autoDesign ? "TỰ THIẾT KẾ vùng màu" : (keepColor && colored ? "GIỮ NGUYÊN màu gốc" : (colored ? "phân vùng theo màu mẫu" : "không màu"))} · độ khó 0–100. Bấm 🎲 Sinh.`;
     try { $b("bGenerate").scrollIntoView({ behavior: "smooth", block: "center" }); } catch (e) {}
   }
   // ---------- Tô màu CHUYÊN NGHIỆP: bộ màu hài hoà + 2 đơn vị KỀ luôn khác & tương phản ----------
@@ -1297,7 +1298,7 @@ self.onmessage = function (e) {
   // nhất quán trong level (cùng vùng màu gốc -> cùng màu mới). KHÔNG palette/bẫy.
   function applyCloneColors(pieces) {
     const cm = B.cloneColorMap; if (!cm || cm.length !== B.H || !cm[0] || cm[0].length !== B.W) return;
-    const offset = 1 + Math.floor(Math.random() * 47);
+    const offset = B.cloneExact ? 0 : (1 + Math.floor(Math.random() * 47));   // cloneExact -> GIỮ NGUYÊN màu gốc (không xoay hue)
     const remap = c => (c >= 1 && c <= 48) ? ((c - 1 + offset) % 48) + 1 : c;
     for (const p of pieces) { if (p.mother) continue; const c0 = cellXY(p.cells[0]); const col = (cm[c0.y] || [])[c0.x]; if (col >= 1) p.fixedColor = remap(col); }
   }
@@ -1529,7 +1530,26 @@ self.onmessage = function (e) {
     setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 120);
   }
   // Level -> object FORMAT GAME (Y-FLIP, Indices...) thuần. + bản pack (kèm metadata để re-import).
-  function gamePure(lvl) { return toGameLevel(lvl.pieces, lvl.w, lvl.h, lvl.tier !== "KẸT" ? lvl.score : 0); }
+  // tên loại obstacle theo Type (tạm — chỉnh lại khi có bảng Type chính thức của game)
+  const OBSTACLE_NAMES = { 0: "wooden box", 1: "black hole", 2: "linked arrow", 3: "corner", 4: "pipe" };
+  function metaOf(lvl) {   // khối metadata thống kê (tính lại từ chính các con rắn)
+    const live = normPieces(lvl.pieces).map((p, i) => (p.id = i + 1, p));
+    const a = analyzeSolve(live, lvl.w, lvl.h);
+    const sig = (typeof percDynamic === "function") ? percDynamic(live, lvl.w, lvl.h) : { perc: 0 };
+    const rates = (a.turnData || []).map(d => d.rate);
+    const avg = rates.length ? Math.round(rates.reduce((x, y) => x + y, 0) / rates.length) : 0;
+    const mn = rates.length ? Math.round(Math.min(...rates)) : 0;
+    const colors = new Set(); lvl.pieces.forEach(p => { if (typeof p.fixedColor === "number" && p.fixedColor >= 1) colors.add(p.fixedColor); });
+    const obs = lvl.gameObstacles || [];
+    return {
+      layout: "L" + lvl.id, shape: B.layoutType,
+      difficulty: lvl.score, snakeCount: lvl.pieces.length, colorCount: colors.size,
+      XSize: lvl.w, YSize: lvl.h, turns: a.turns,
+      percDyn: Math.round(sig.perc || 0), avgMoveRate: avg, minRate: mn, t1: a.t1Avail || 0,
+      obstacleCount: obs.length, obstacles: [...new Set(obs.map(o => OBSTACLE_NAMES[o.Type] || ("type" + o.Type)))],
+    };
+  }
+  function gamePure(lvl) { return toGameLevel(lvl.pieces, lvl.w, lvl.h, lvl.tier !== "KẸT" ? lvl.score : 0, metaOf(lvl)); }
   function packLevelOf(lvl) {
     return Object.assign(gamePure(lvl), {
       score: lvl.score, tier: lvl.tier, target: lvl.target,
@@ -1541,7 +1561,7 @@ self.onmessage = function (e) {
     const sel = selectedLevels();
     if (!sel.length) { $b("bSelInfo").textContent = "Chưa chọn level nào để export."; return; }
     const pad = Math.max(3, String(sel.length).length);
-    const manifest = { generatedBy: "Arrow Out batch", format: "game (XSize/YSize/Arrows, Y-flip)", count: sel.length, board: { w: B.W, h: B.H }, layout: B.layoutType, levels: [] };
+    const manifest = { generatedBy: "Arrow Out batch", format: "game (XSize/YSize/Arrows[Indices]/Colors/metadata, Y-flip)", count: sel.length, board: { w: B.W, h: B.H }, layout: B.layoutType, levels: [] };
     const files = [];
     sel.forEach((lvl, i) => {
       const name = "level" + String(i + 1).padStart(pad, "0") + ".json";
@@ -1563,10 +1583,10 @@ self.onmessage = function (e) {
   function ingestLevels(arr) {
     let startId = nextLibId(), added = 0, sawColor = false;
     for (const o of arr) {
-      let w, h, pieces;
+      let w, h, pieces, obstacles = [];
       if (isGameFormat(o)) {                                  // format game (lẻ hoặc trong pack)
-        const g = fromGameLevel(o); w = g.w; h = g.h;
-        pieces = g.pieces.map(p => ({ dir: p.dir, cells: p.cells.map(c => [c.x, c.y]), ...(typeof p.fixedColor === "number" ? { fixedColor: p.fixedColor } : {}) }));
+        const g = fromGameLevel(o); w = g.w; h = g.h; obstacles = g.obstacles || [];
+        pieces = g.pieces.map(p => ({ dir: p.dir, cells: p.cells.map(c => [c.x, c.y]), ...(typeof p.fixedColor === "number" && p.fixedColor >= 1 ? { fixedColor: p.fixedColor } : {}) }));
       } else {                                                // format cũ {w,h,pieces}
         if (!o || !Array.isArray(o.pieces)) continue;
         w = o.w || (o.grid && o.grid[0] ? o.grid[0].length : 0); h = o.h || (o.grid ? o.grid.length : 0);
@@ -1587,6 +1607,7 @@ self.onmessage = function (e) {
         fillReal, empty: Math.max(0, area - covered), turns: a.turns,
         t1Pct: live.length ? Math.round(a.t1Avail / live.length * 100) : 0, stuck: a.stuck,
         target: o.target, pieces, id,
+        ...(obstacles.length ? { gameObstacles: obstacles } : {}),   // giữ Obstacles import được để re-export không mất
       });
       B.selection.add(id); added++;
     }
@@ -1727,8 +1748,8 @@ self.onmessage = function (e) {
     renderPreview();   // paint bắt đầu TRỐNG (vẽ từ đầu); dùng "Bật hết" nếu muốn full rồi xóa bớt
   }
   function applySize() {
-    B.cloneColorMap = null; B.clonePinned = null; B.cloneKeep = false; B.cloneSource = null;   // đổi cỡ thủ công -> bỏ clone
-    { const wrap = $b("bCloneAutoColorWrap"); if (wrap) wrap.style.display = "none"; }
+    B.cloneColorMap = null; B.clonePinned = null; B.cloneKeep = false; B.cloneExact = false; B.cloneSource = null;   // đổi cỡ thủ công -> bỏ clone
+    { const wrap = $b("bCloneAutoColorWrap"); if (wrap) wrap.style.display = "none"; const w2 = $b("bCloneKeepColorWrap"); if (w2) w2.style.display = "none"; }
     B.W = clamp(+$b("bW").value, 3, 60); B.H = clamp(+$b("bH").value, 3, 60);
     $b("bW").value = B.W; $b("bH").value = B.H;
     B.paint = new Set([...B.paint].filter(k => { const i = k.indexOf(","), x = +k.slice(0, i), y = +k.slice(i + 1); return x < B.W && y < B.H; }));
@@ -1736,9 +1757,10 @@ self.onmessage = function (e) {
     renderPreview(); updateCurveInfo();
   }
 
-  $b("bLayoutType").addEventListener("change", () => { B.cloneColorMap = null; B.clonePinned = null; B.cloneKeep = false; B.cloneSource = null; const w = $b("bCloneAutoColorWrap"); if (w) w.style.display = "none"; setLayoutType($b("bLayoutType").value); });   // đổi layout thủ công -> bỏ clone
+  $b("bLayoutType").addEventListener("change", () => { B.cloneColorMap = null; B.clonePinned = null; B.cloneKeep = false; B.cloneExact = false; B.cloneSource = null; const w = $b("bCloneAutoColorWrap"); if (w) w.style.display = "none"; const w2 = $b("bCloneKeepColorWrap"); if (w2) w2.style.display = "none"; setLayoutType($b("bLayoutType").value); });   // đổi layout thủ công -> bỏ clone
   { const fr = $b("bFreeRoll"); if (fr) fr.addEventListener("click", () => { B.freeMask = genFreeShapes(B.W, B.H); renderPreview(); updateCurveInfo(); }); }   // tung lại bố cục hình rời
-  $b("bCloneAutoColor").addEventListener("change", () => { if (B.cloneSource) cloneLevel(B.cloneSource); });   // đổi tích -> dựng lại clone (bắt chước <-> tự thiết kế)
+  $b("bCloneAutoColor").addEventListener("change", () => { if ($b("bCloneAutoColor").checked && $b("bCloneKeepColor")) $b("bCloneKeepColor").checked = false; if (B.cloneSource) cloneLevel(B.cloneSource); });   // đổi tích -> dựng lại clone (bắt chước <-> tự thiết kế)
+  { const kc = $b("bCloneKeepColor"); if (kc) kc.addEventListener("change", () => { if (kc.checked && $b("bCloneAutoColor")) $b("bCloneAutoColor").checked = false; if (B.cloneSource) cloneLevel(B.cloneSource); }); }   // giữ-nguyên-màu <-> các chế độ khác (loại trừ lẫn nhau với tự-thiết-kế)
   $b("bApplySize").addEventListener("click", applySize);
   $b("bImgBtn").addEventListener("click", () => $b("bImg").click());
   $b("bImg").addEventListener("change", () => {

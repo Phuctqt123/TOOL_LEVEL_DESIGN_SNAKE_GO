@@ -41,22 +41,24 @@ function countBends(cells) {
 // Nhận diện format game (có XSize/Arrows) vs format cũ của mình ({w,h,pieces} / grid).
 function isGameFormat(d) { return !!(d && (d.XSize != null || Array.isArray(d.Arrows))); }
 // pieces nội bộ -> object JSON đúng format game (Y-FLIP: Y_game = h-1-y; idx = x + Y_game*w).
-function toGameLevel(pieces, w, h, difficulty) {
+function toGameLevel(pieces, w, h, difficulty, meta) {
   const flipY = y => h - 1 - y;
   const norm = c => Array.isArray(c) ? { x: c[0], y: c[1] } : { x: c.x, y: c.y };
-  return {
+  const out = {
     Difficulty: difficulty || 0, XSize: w, YSize: h,
     Arrows: pieces.map(p => {
       const cells = p.cells.map(norm), head = cells[0], dd = DELTA[p.dir] || { x: 0, y: -1 };
       return {
         Dx: dd.x, Dy: -dd.y, X: head.x, Y: flipY(head.y),
-        fixedColor: (typeof p.fixedColor === "number") ? p.fixedColor : -1,
+        fixedColor: (typeof p.fixedColor === "number" && p.fixedColor >= 1) ? p.fixedColor : 0,   // 0 = không màu (đúng format game)
         Indices: cells.map(c => c.x + flipY(c.y) * w),
         BendCount: (typeof p.bends === "number") ? p.bends : countBends(cells)
       };
     }),
     Colors: []
   };
+  if (meta) out.metadata = meta;   // obstacle (tên + count) nằm TRONG metadata; không có Obstacles top-level
+  return out;
 }
 // object JSON format game -> { w, h, pieces:[{dir, cells:[{x,y}], fixedColor, bends}] }.
 // Y-FLIP ngược lại + LUÔN suy hd từ cells (bỏ qua Dx/Dy của file — quy ước game không khớp solver).
@@ -69,10 +71,10 @@ function fromGameLevel(data) {
     let dir;
     if (cells.length >= 2) dir = dirFromTo(cells[1], cells[0]);
     else dir = dirFromDelta(arrow.Dx || 0, -(arrow.Dy || 0));   // 1 ô: dùng Dx/Dy (đảo Dy)
-    const fc = (typeof arrow.fixedColor === "number") ? arrow.fixedColor : -1;
+    const fc = (typeof arrow.fixedColor === "number" && arrow.fixedColor >= 1) ? arrow.fixedColor : -1;   // 0/khuyết = không màu
     pieces.push({ dir, cells, fixedColor: fc, bends: (typeof arrow.BendCount === "number") ? arrow.BendCount : countBends(cells) });
   }
-  return { w, h, pieces };
+  return { w, h, pieces, obstacles: Array.isArray(data.Obstacles) ? data.Obstacles : [] };
 }
 
 // (Đã bỏ level mẫu — chỉ vào chế độ chơi khi Test level đang tạo hoặc chơi từ Thư viện hàng loạt)
