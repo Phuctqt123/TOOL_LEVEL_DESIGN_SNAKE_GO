@@ -53,7 +53,10 @@
       if (cor) { const nd = cornerOut(cor.type, dir); if (!nd) return { ok: false, reason: "cornerwall" }; dir = nd; continue; }
       if (it.bh.some(b => b.x === x && b.y === y)) return { ok: true, removed: true, reason: "bh", pipes };
       let ph = null, pk = -1; for (const p of it.pipe) { const k = p.cells.findIndex(c => c.x === x && c.y === y); if (k >= 0) { ph = p; pk = k; break; } }
-      if (ph) { if (pk !== 0 && pk !== ph.cells.length - 1) return { ok: false, reason: "pipebody" }; if (pipes.indexOf(ph) < 0) pipes.push(ph); const seq = pk === 0 ? ph.cells : ph.cells.slice().reverse(); const oe = seq[seq.length - 1], oa = seq[seq.length - 2]; dir = dirOf(oa, oe); x = oe.x; y = oe.y; continue; }
+      if (ph) {   // CHỈ vào ĐẦU VÀO (cells[0]) khi ĐÚNG HƯỚNG; đầu ra / thân / sai hướng = chặn
+        if (pk === 0 && dir === dirOf(ph.cells[0], ph.cells[1])) { if (pipes.indexOf(ph) < 0) pipes.push(ph); const oe = ph.cells[ph.cells.length - 1], oa = ph.cells[ph.cells.length - 2]; dir = dirOf(oa, oe); x = oe.x; y = oe.y; continue; }
+        return { ok: false, reason: "pipebody" };
+      }
       if (it.wb.some(w => w.x === x && w.y === y)) return { ok: false, reason: "wb" };
       if (body.has(x + "," + y)) return { ok: false, reason: "self" };
       if (others.some(o => o.cells.some(c => c.x === x && c.y === y))) return { ok: false, reason: "snake" };
@@ -69,7 +72,7 @@
       if (cor) { const nd = cornerOut(cor.type, dir); route.push({ x, y }); if (!nd) { end = "edge"; break; } dir = nd; endDir = nd; continue; }
       if (it.bh.some(b => b.x === x && b.y === y)) { route.push({ x, y }); end = "absorb"; break; }
       let ph = null, pk = -1; for (const p of it.pipe) { const k = p.cells.findIndex(c => c.x === x && c.y === y); if (k >= 0) { ph = p; pk = k; break; } }
-      if (ph) { if (pk !== 0 && pk !== ph.cells.length - 1) { route.push({ x, y }); end = "edge"; break; } const seq = pk === 0 ? ph.cells : ph.cells.slice().reverse(); seq.forEach(c => route.push({ x: c.x, y: c.y })); const oe = seq[seq.length - 1], oa = seq[seq.length - 2]; dir = dirOf(oa, oe); endDir = dir; x = oe.x; y = oe.y; continue; }
+      if (ph) { if (pk === 0 && dir === dirOf(ph.cells[0], ph.cells[1])) { ph.cells.forEach(c => route.push({ x: c.x, y: c.y })); const oe = ph.cells[ph.cells.length - 1], oa = ph.cells[ph.cells.length - 2]; dir = dirOf(oa, oe); endDir = dir; x = oe.x; y = oe.y; continue; } route.push({ x, y }); end = "edge"; break; }
       route.push({ x, y });
     }
     return { route, end, endDir };
@@ -90,23 +93,11 @@
     return { solvable: work.length === 0 };
   }
   function solvableWith(s, it, W, H) { return sg2Solve(s, it, W, H).solvable; }
-  // Tia của 1 rắn (BỎ QUA rắn khác) có CHẠM/DÙNG ô đích không (corner rẽ, pipe chui, BH/WB chặn).
-  function rayTouch(snake, items, W, H, target) {
-    let { x, y } = snake.cells[0], dir = snake.dir; const body = new Set(snake.cells.slice(1).map(c => c.x + "," + c.y)); let guard = 0, max = (W + H) * 6;
-    while (guard++ < max) {
-      x += DZ[dir].x; y += DZ[dir].y;
-      if (x < 0 || y < 0 || x >= W || y >= H) return false;
-      if (target.has(x + "," + y)) return true;
-      const cor = items.corner.find(c => c.x === x && c.y === y); if (cor) { const nd = cornerOut(cor.type, dir); if (!nd) return false; dir = nd; continue; }
-      if (items.bh.some(b => b.x === x && b.y === y)) return false;
-      let ph = null, pk = -1; for (const p of items.pipe) { const k = p.cells.findIndex(c => c.x === x && c.y === y); if (k >= 0) { ph = p; pk = k; break; } }
-      if (ph) { if (pk !== 0 && pk !== ph.cells.length - 1) return false; const seq = pk === 0 ? ph.cells : ph.cells.slice().reverse(); const oe = seq[seq.length - 1], oa = seq[seq.length - 2]; dir = dirOf(oa, oe); x = oe.x; y = oe.y; continue; }
-      if (items.wb.some(w => w.x === x && w.y === y)) return false;
-      if (body.has(x + "," + y)) return false;
-    }
-    return false;
-  }
-  function itemUsable(snakes, items, W, H, target) { return snakes.some(s => !s.mother && rayTouch(s, items, W, H, target)); }
+  // 1 con rắn ở TRẠNG THÁI ĐẦU (xét cả rắn khác) có thoát được không — để kiểm tra vật phẩm có ĐẢO tính hợp lệ.
+  function rayEscapesCtx(snake, snakes, items, W, H) { const r = rayResolve(snake, snakes.filter(o => o !== snake), items, W, H); return !!(r.ok && r.removed); }
+  function escStates(snakes, items, W, H) { return snakes.map(sn => sn.mother ? false : rayEscapesCtx(sn, snakes, items, W, H)); }
+  // có ≥1 con rắn bị ĐẢO kết quả thoát (so với before) khi có thêm vật phẩm
+  function anyFlip(snakes, items, W, H, before) { return snakes.some((sn, i) => !sn.mother && rayEscapesCtx(sn, snakes, items, W, H) !== before[i]); }
 
   // ============================ ĐỘ KHÓ = Snake 1 + 1 trọng số vật phẩm ============================
   function itemWeight(snakes, items, N) {
@@ -134,12 +125,12 @@
     let added = 0, att = want * 8 + 6;
     while (added < want && att-- > 0) {
       const E = emptyCells(s, it, W, H, mask); if (!E.length) break; const c = E[rnd(E.length)]; let undo;
+      const before = escStates(s, it, W, H);                                  // trạng thái thoát TRƯỚC khi thêm
       if (kind === "bh") { it.bh.push({ x: c.x, y: c.y }); undo = () => it.bh.pop(); }
       else if (kind === "corner") { it.corner.push({ x: c.x, y: c.y, type: Object.keys(CORNER_OPEN)[rnd(4)] }); undo = () => it.corner.pop(); }
       else if (kind === "wb") { it.wb.push({ x: c.x, y: c.y, n: 1 + rnd(Math.min(6, s.length)) }); undo = () => it.wb.pop(); }
-      const target = new Set([c.x + "," + c.y]);
       const okSolve = kind === "bh" || solvableWith(s, it, W, H);            // BH chỉ hỗ trợ -> không phá solvable
-      if (okSolve && itemUsable(s, it, W, H, target)) added++; else undo();   // PHẢI có ≥1 rắn chạm/dùng được
+      if (okSolve && anyFlip(s, it, W, H, before)) added++; else undo();      // PHẢI ĐẢO tính hợp lệ ≥1 con
     }
     return added;
   }
@@ -148,7 +139,8 @@
   function pipeBlockingSnake(s, it, W, H, mask) {
     const used = cellsUsed(s, it);
     const free = (x, y) => x >= 0 && y >= 0 && x < W && y < H && !used.has(x + "," + y) && (!mask || mask.has(x + "," + y));
-    const cand = s.filter(sn => !sn.mother).slice().sort(() => Math.random() - .5); let budget = 24;
+    const cand = s.filter(sn => !sn.mother && !sn.link).slice().sort(() => Math.random() - .5); let budget = 24;
+    const before = escStates(s, it, W, H);   // tính 1 lần (các combo chỉ thêm/bớt 1 pipe thử)
     for (const sn of cand) {
       const d = DZ[sn.dir], perp = (sn.dir === "up" || sn.dir === "down") ? { x: 1, y: 0 } : { x: 0, y: 1 };
       let x = sn.cells[0].x, y = sn.cells[0].y; const lane = [];
@@ -157,8 +149,8 @@
         const e1 = { x: mid.x + perp.x, y: mid.y + perp.y }, e2 = { x: mid.x - perp.x, y: mid.y - perp.y };
         if (!free(e1.x, e1.y) || !free(e2.x, e2.y)) continue;
         if (budget-- <= 0) return false;
-        it.pipe.push({ cells: [e1, { x: mid.x, y: mid.y }, e2], n: 1 + rnd(2) });   // 2 đầu vuông góc, thân chắn lane
-        if (solvableWith(s, it, W, H) && itemUsable(s, it, W, H, new Set([e1.x + "," + e1.y, e2.x + "," + e2.y]))) return true;
+        const pipe = { cells: [e1, { x: mid.x, y: mid.y }, e2], n: 1 + rnd(2) }; it.pipe.push(pipe);   // đầu vào e1, ra e2, thân chắn lane
+        if (solvableWith(s, it, W, H) && anyFlip(s, it, W, H, before)) return true;
         it.pipe.pop();
       }
     }
@@ -182,9 +174,9 @@
         const mv = opts[rnd(opts.length)]; cx += mv[0]; cy += mv[1]; last = mv; path.push({ x: cx, y: cy }); occ.add(cx + "," + cy);
       }
       if (path.length < 2) continue;
-      it.pipe.push({ cells: path, n: 1 + rnd(Math.min(5, s.length)) });
-      const ends = new Set([path[0].x + "," + path[0].y, path[path.length - 1].x + "," + path[path.length - 1].y]);
-      if (solvableWith(s, it, W, H) && itemUsable(s, it, W, H, ends)) made++; else it.pipe.pop();   // PHẢI có rắn chui được 1 đầu
+      const before = escStates(s, it, W, H);
+      const pipe = { cells: path, n: 1 + rnd(Math.min(5, s.length)) }; it.pipe.push(pipe);
+      if (solvableWith(s, it, W, H) && anyFlip(s, it, W, H, before)) made++; else it.pipe.pop();   // PHẢI ĐẢO tính hợp lệ ≥1 con
     }
     return made;
   }
@@ -204,6 +196,8 @@
           if (ok) snakes.push({ id: nid++, dir, cells: line, link: lid });   // line[0] = đầu (quay theo dir)
         }
         if (!ok) continue;
+        const inward = snakes.every(sn => { const h = sn.cells[0], fx = h.x + D.x, fy = h.y + D.y; return fx >= 0 && fy >= 0 && fx < W && fy < H; });   // QUAY VÀO TRONG (để bị chặn)
+        if (!inward) continue;
         allCells.forEach(c => reserved.add(c.x + "," + c.y));
         groups.push(...snakes); lid++; break;
       }
@@ -219,6 +213,12 @@
     snakes.forEach(s => { if (s.mother) { s.fixedColor = 0; return; } const h = s.cells[0]; let bi = 0, bd = 1e9; seeds.forEach((sd, i) => { const d = (sd.x - h.x) ** 2 + (sd.y - h.y) ** 2; if (d < bd) { bd = d; bi = i; } }); s.fixedColor = zc[bi]; });
   }
 
+  // Lane phía trước mỗi rắn link (ô thẳng từ đầu tới rìa) — cấm đặt vật phẩm ở đây.
+  function linkedLanes(snakes, W, H) {
+    const f = new Set();
+    snakes.filter(s => s.link).forEach(s => { let x = s.cells[0].x, y = s.cells[0].y; const d = DZ[s.dir]; for (let k = 0; k < W + H; k++) { x += d.x; y += d.y; if (x < 0 || y < 0 || x >= W || y >= H) break; f.add(x + "," + y); } });
+    return f;
+  }
   function genOne(target) {
     const W = S.W, H = S.H, shapeMask = buildMask(S.shape, W, H);
     let linked = [], reserved = null;
@@ -233,12 +233,20 @@
     linked.forEach(s => snakes.push(s));
     if (snakes.length < 2) return null;
     if (S.mother && typeof buildMother === "function") { const internal = snakes.map(s => ({ id: s.id, dir: s.dir, cells: s.cells.map(c => ({ ...c })) })); let mo = []; try { mo = buildMother(internal, W, H, 1, shapeMask ? Array.from(shapeMask) : null) || []; } catch (e) { mo = []; } mo.forEach((m, k) => snakes.push({ id: 900 + k, dir: m.dir, cells: m.cells.map(c => ({ x: c.x, y: c.y })), link: null, mother: true })); }
-    const items = { wb: [], bh: [], corner: [], pipe: [] }, area = shapeMask ? shapeMask.size : W * H;
-    if (S.items.corner) tryAddItems(snakes, items, W, H, shapeMask, "corner", Math.max(1, Math.round(S.dens.corner / 100 * area / 16)));
-    if (S.items.wb) tryAddItems(snakes, items, W, H, shapeMask, "wb", Math.max(1, Math.round(S.dens.wb / 100 * area / 18)));
-    if (S.items.pipe) tryAddPipes(snakes, items, W, H, shapeMask, Math.max(1, Math.round(S.dens.pipe / 100 * area / 30)));
-    if (S.items.bh) tryAddItems(snakes, items, W, H, shapeMask, "bh", Math.max(1, Math.round(S.dens.bh / 100 * area / 30)));
+    const area = shapeMask ? shapeMask.size : W * H;
+    let cov = 0; snakes.forEach(s => cov += s.cells.length);
+    if (Math.round(cov / area * 100) < S.fill - 3) return null;   // fill thực phải >= (X−3)%
+    // CẤM vật phẩm trên LANE rắn link (đường thẳng phía trước) -> không tách nhóm
+    const forbid = linkedLanes(snakes, W, H); let itemMask = shapeMask;
+    if (forbid.size) { itemMask = new Set(); for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) { const k = x + "," + y; if ((!shapeMask || shapeMask.has(k)) && !forbid.has(k)) itemMask.add(k); } }
+    const items = { wb: [], bh: [], corner: [], pipe: [] };
+    if (S.items.corner) tryAddItems(snakes, items, W, H, itemMask, "corner", Math.max(1, Math.round(S.dens.corner / 100 * area / 16)));
+    if (S.items.wb) tryAddItems(snakes, items, W, H, itemMask, "wb", Math.max(1, Math.round(S.dens.wb / 100 * area / 18)));
+    if (S.items.pipe) tryAddPipes(snakes, items, W, H, itemMask, Math.max(1, Math.round(S.dens.pipe / 100 * area / 30)));
+    if (S.items.bh) tryAddItems(snakes, items, W, H, itemMask, "bh", Math.max(1, Math.round(S.dens.bh / 100 * area / 30)));
     if (!solvableWith(snakes, items, W, H)) return null;
+    // Cụm Linked phải BỊ CHẶN lúc mới vào (không thoát ngay) -> loại nếu thoát được ngay
+    for (const g of groupsOf(snakes).filter(g => g.length > 1)) { const others = snakes.filter(o => g.indexOf(o) < 0); if (g.every(m => { const r = rayResolve(m, others, items, W, H); return r.ok && r.removed; })) return null; }
     const d = sg2Difficulty(snakes, items, W, H); if (d.tier === "KẸT") return null;
     zoneColor(snakes, W, H);
     return { id: nextId++, W, H, snakes, items, score: d.score, tier: d.tier, emoji: d.emoji, shapeName: S.shape };
@@ -294,8 +302,13 @@
   function drawPipe(g, p, c) {
     const pts = p.cells.map(cc => ({ x: cc.x * c + c / 2, y: cc.y * c + c / 2 })); g.lineCap = "round"; g.lineJoin = "round";
     [[.72, "#2a86e6"], [.5, "#5cb0ff"], [.14, "rgba(255,255,255,.45)"]].forEach(([w, col]) => { g.strokeStyle = col; g.lineWidth = c * w; g.beginPath(); pts.forEach((pt, k) => k ? g.lineTo(pt.x, pt.y) : g.moveTo(pt.x, pt.y)); g.stroke(); });
-    const ex = pts[pts.length - 1]; g.fillStyle = "#0e3a72"; g.beginPath(); g.arc(ex.x, ex.y, c * .2, 0, 7); g.fill(); g.strokeStyle = "#9fd0ff"; g.lineWidth = Math.max(1.5, c * .08); g.beginPath(); g.arc(ex.x, ex.y, c * .24, 0, 7); g.stroke();   // miệng kia
-    const en = pts[0]; g.fillStyle = "#1565c8"; g.beginPath(); g.arc(en.x, en.y, c * .36, 0, 7); g.fill(); g.fillStyle = "#eaf4ff"; g.beginPath(); g.arc(en.x, en.y, c * .27, 0, 7); g.fill(); lbl(g, p.n != null ? p.n : "", en.x, en.y, c, "#1565c8");   // badge số đếm
+    const tri = (px, py, d, col, sz) => { const ppx = -d.y, ppy = d.x; g.fillStyle = col; g.beginPath(); g.moveTo(px + d.x * sz, py + d.y * sz); g.lineTo(px + ppx * sz * .8, py + ppy * sz * .8); g.lineTo(px - ppx * sz * .8, py - ppy * sz * .8); g.closePath(); g.fill(); };
+    const ex = pts[pts.length - 1], exd = DZ[dirOf(p.cells[p.cells.length - 2], p.cells[p.cells.length - 1])];   // ĐẦU RA: bịt + mũi tên ra
+    g.fillStyle = "#0c2f5c"; g.beginPath(); g.arc(ex.x, ex.y, c * .24, 0, 7); g.fill(); g.strokeStyle = "#7fb0e6"; g.lineWidth = Math.max(1.5, c * .07); g.beginPath(); g.arc(ex.x, ex.y, c * .27, 0, 7); g.stroke();
+    tri(ex.x + exd.x * c * .3, ex.y + exd.y * c * .3, exd, "#bfe0ff", c * .16);
+    const en = pts[0], end = DZ[dirOf(p.cells[0], p.cells[1])];   // ĐẦU VÀO: badge số + mũi tên chỉ VÀO (hướng phải khớp)
+    g.fillStyle = "#1565c8"; g.beginPath(); g.arc(en.x, en.y, c * .36, 0, 7); g.fill(); g.fillStyle = "#eaf4ff"; g.beginPath(); g.arc(en.x, en.y, c * .27, 0, 7); g.fill(); lbl(g, p.n != null ? p.n : "", en.x, en.y, c, "#1565c8");
+    tri(en.x - end.x * c * .52, en.y - end.y * c * .52, end, "#1565c8", c * .17);
   }
   function drawSnakeBody(g, s, i, c, opt) {
     opt = opt || {}; const color = opt.color || colorFor(s, i), ox = opt.ox || 0, oy = opt.oy || 0;
@@ -390,7 +403,7 @@
   function ceSave() { if (CE.lvl) { saveLib(); refreshThumb(CE.lvl); } ceClose(); }
 
   // ============================ CHƠI THỬ + ANIMATION ============================
-  const PLAY = { lvl: null, R: null, stars: 3, cv: null, ctx: null, flash: null, anims: [], loopOn: false }; let fxRAF = null;
+  const PLAY = { lvl: null, R: null, stars: 3, cv: null, ctx: null, anims: [], loopOn: false, bumpingIds: new Set() }; let fxRAF = null;
   function ensurePlayModal() {
     if ($("sg2PlayBd")) return;
     const bd = document.createElement("div"); bd.id = "sg2PlayBd"; bd.className = "sg2-play-bd";
@@ -405,18 +418,42 @@
     document.addEventListener("keydown", e => { if (e.key === "Escape" && $("sg2PlayBd").classList.contains("show")) closePlay(); });
   }
   function openPlay(lvl) { ensurePlayModal(); $("sg2PlayTitle").textContent = `#${lvl.id} · ${lvl.tier} (${lvl.score})`; startRun(lvl); $("sg2PlayBd").classList.add("show"); }
-  function closePlay() { const bd = $("sg2PlayBd"); if (bd) bd.classList.remove("show"); cancelAnimationFrame(fxRAF); PLAY.loopOn = false; PLAY.anims = []; PLAY.lvl = null; PLAY.R = null; }
-  function startRun(lvl) { cancelAnimationFrame(fxRAF); PLAY.loopOn = false; PLAY.anims = []; PLAY.lvl = lvl; PLAY.stars = 3; PLAY.flash = null; PLAY.R = { snakes: lvl.snakes.map(s => ({ id: s.id, dir: s.dir, cells: s.cells.map(c => ({ ...c })), link: s.link, mother: s.mother, fixedColor: s.fixedColor })), items: cloneItems(lvl.items) }; const w = $("sg2Win"); if (w) w.classList.remove("show"); setPlayMsg("Bấm 1 con rắn để bắn nó ra khỏi bàn."); drawPlay(); }
+  function closePlay() { const bd = $("sg2PlayBd"); if (bd) bd.classList.remove("show"); cancelAnimationFrame(fxRAF); PLAY.loopOn = false; PLAY.anims = []; PLAY.bumpingIds.clear(); PLAY.lvl = null; PLAY.R = null; }
+  function startRun(lvl) { cancelAnimationFrame(fxRAF); PLAY.loopOn = false; PLAY.anims = []; PLAY.bumpingIds.clear(); PLAY.lvl = lvl; PLAY.stars = 3; PLAY.R = { snakes: lvl.snakes.map(s => ({ id: s.id, dir: s.dir, cells: s.cells.map(c => ({ ...c })), link: s.link, mother: s.mother, fixedColor: s.fixedColor })), items: cloneItems(lvl.items) }; const w = $("sg2Win"); if (w) w.classList.remove("show"); setPlayMsg("Bấm 1 con rắn để bắn nó ra khỏi bàn."); drawPlay(); }
   function playGeom() { const lvl = PLAY.lvl, max = Math.min(560, (window.innerWidth || 800) - 80, (window.innerHeight || 800) - 230); return Math.max(14, Math.floor(max / Math.max(lvl.W, lvl.H))); }
   function syncHud() { $("sg2PlayStars").textContent = "⭐".repeat(PLAY.stars) + "☆".repeat(Math.max(0, 3 - PLAY.stars)); $("sg2PlayLeft").textContent = "🐍 " + PLAY.R.snakes.length; }
   function setCanvasSize() { const lvl = PLAY.lvl, c = playGeom(), dpr = Math.min(2, window.devicePixelRatio || 1); PLAY.cv.width = lvl.W * c * dpr; PLAY.cv.height = lvl.H * c * dpr; PLAY.cv.style.width = lvl.W * c + "px"; PLAY.cv.style.height = lvl.H * c + "px"; PLAY.ctx.setTransform(dpr, 0, 0, dpr, 0, 0); return c; }
-  function drawPlay() { if (!PLAY.lvl) return; const c = setCanvasSize(); drawLevel(PLAY.ctx, PLAY.lvl, c, PLAY.R); if (PLAY.flash) PLAY.R.snakes.forEach((s, i) => { if (PLAY.flash.has(s.id)) drawSnakeBody(PLAY.ctx, s, i, c, { glow: "#ff4d4d", color: "#ff5a5a" }); }); syncHud(); return c; }
+  function drawPlay() { if (!PLAY.lvl) return; const c = setCanvasSize(); drawLevel(PLAY.ctx, PLAY.lvl, c, PLAY.R, PLAY.bumpingIds.size ? PLAY.bumpingIds : null); syncHud(); return c; }
   function setPlayMsg(m) { const el = $("sg2PlayMsg"); if (el) el.textContent = m; }
-  function onPlayClick(e) { if (!PLAY.R) return; const r = PLAY.cv.getBoundingClientRect(), c = playGeom(); const x = Math.floor((e.clientX - r.left) * (PLAY.lvl.W * c / r.width) / c), y = Math.floor((e.clientY - r.top) * (PLAY.lvl.H * c / r.height) / c); const s = PLAY.R.snakes.find(s => s.cells.some(cc => cc.x === x && cc.y === y)); if (s) tryMove(s); }
+  function onPlayClick(e) { if (!PLAY.R) return; const r = PLAY.cv.getBoundingClientRect(), c = playGeom(); const x = Math.floor((e.clientX - r.left) * (PLAY.lvl.W * c / r.width) / c), y = Math.floor((e.clientY - r.top) * (PLAY.lvl.H * c / r.height) / c); const s = PLAY.R.snakes.find(s => s.cells.some(cc => cc.x === x && cc.y === y)); if (s && !PLAY.bumpingIds.has(s.id)) tryMove(s); }
+  // Đường đầu rắn đi được TỚI vật cản (theo corner/pipe), dừng TRƯỚC chỗ chặn -> để trượt tới rồi dội.
+  function blockRoute(snake, others, it, W, H) {
+    let { x, y } = snake.cells[0], dir = snake.dir; const route = []; const body = new Set(snake.cells.slice(1).map(c => c.x + "," + c.y)); let guard = 0, max = (W + H) * 6;
+    while (guard++ < max) {
+      const nx = x + DZ[dir].x, ny = y + DZ[dir].y;
+      if (nx < 0 || ny < 0 || nx >= W || ny >= H) break;
+      const cor = it.corner.find(c => c.x === nx && c.y === ny);
+      if (cor) { const nd = cornerOut(cor.type, dir); if (!nd) break; route.push({ x: nx, y: ny }); dir = nd; x = nx; y = ny; continue; }
+      let ph = null, pk = -1; for (const p of it.pipe) { const k = p.cells.findIndex(c => c.x === nx && c.y === ny); if (k >= 0) { ph = p; pk = k; break; } }
+      if (ph) { if (pk === 0 && dir === dirOf(ph.cells[0], ph.cells[1])) { ph.cells.forEach(c => route.push({ x: c.x, y: c.y })); const oe = ph.cells[ph.cells.length - 1], oa = ph.cells[ph.cells.length - 2]; dir = dirOf(oa, oe); x = oe.x; y = oe.y; continue; } break; }
+      if (it.bh.some(b => b.x === nx && b.y === ny)) break;
+      if (it.wb.some(w => w.x === nx && w.y === ny)) break;
+      if (body.has(nx + "," + ny)) break;
+      if (others.some(o => o.cells.some(c => c.x === nx && c.y === ny))) break;
+      route.push({ x: nx, y: ny }); x = nx; y = ny;
+    }
+    return { route, dir };
+  }
+  function addBump(group) {
+    const c = playGeom(), R = PLAY.R, W = PLAY.lvl.W, H = PLAY.lvl.H, others = R.snakes.filter(o => group.indexOf(o) < 0);
+    const bumps = group.map(m => { const bd = blockRoute(m, others, R.items, W, H); return { traj: buildTraj(m, bd.route, "block", bd.dir, c, colorFor(m, 0)), id: m.id }; });
+    group.forEach(m => PLAY.bumpingIds.add(m.id)); PLAY.anims.push({ bump: true, bumps, t0: now() }); ensureFxLoop();
+  }
   function buildTraj(snake, route, end, endDir, c, color) {
     const ctr = (x, y) => ({ x: x * c + c / 2, y: y * c + c / 2 });
     const track = snake.cells.map(cc => ctr(cc.x, cc.y)).reverse(); route.forEach(rc => track.push(ctr(rc.x, rc.y)));
     if (end === "edge") { let last = route.length ? route[route.length - 1] : snake.cells[0]; for (let k = 1; k <= 4; k++) track.push(ctr(last.x + DZ[endDir].x * k, last.y + DZ[endDir].y * k)); }
+    else if (end === "block") { const last = route.length ? route[route.length - 1] : snake.cells[0], lc = ctr(last.x, last.y); track.push({ x: lc.x + DZ[endDir].x * c * .6, y: lc.y + DZ[endDir].y * c * .6 }); }   // lao nhẹ chạm vật cản
     const R = c * .4, sm = [track[0]];
     for (let i = 1; i < track.length - 1; i++) { const p0 = track[i - 1], p1 = track[i], p2 = track[i + 1]; const v1x = p1.x - p0.x, v1y = p1.y - p0.y, l1 = Math.hypot(v1x, v1y) || 1, v2x = p2.x - p1.x, v2y = p2.y - p1.y, l2 = Math.hypot(v2x, v2y) || 1, rr = Math.min(R, l1 / 2, l2 / 2); const ax = p1.x - v1x / l1 * rr, ay = p1.y - v1y / l1 * rr, bx = p1.x + v2x / l2 * rr, by = p1.y + v2y / l2 * rr; sm.push({ x: ax, y: ay }); if (Math.abs(v1x * v2y - v1y * v2x) > .5) for (let s = 1; s < 7; s++) { const tt = s / 7, mt = 1 - tt; sm.push({ x: mt * mt * ax + 2 * mt * tt * p1.x + tt * tt * bx, y: mt * mt * ay + 2 * mt * tt * p1.y + tt * tt * by }); } sm.push({ x: bx, y: by }); }
     sm.push(track[track.length - 1]); const cum = [0]; for (let i = 1; i < sm.length; i++) cum.push(cum[i - 1] + Math.hypot(sm[i].x - sm[i - 1].x, sm[i].y - sm[i - 1].y)); const total = cum[cum.length - 1];
@@ -436,10 +473,10 @@
     const others = R.snakes.filter(o => group.indexOf(o) < 0);
     const res = group.map(m => rayResolve(m, others, R.items, W, H));
     if (!res.every(r => r.ok && r.removed)) {
-      const wbHit = res.some(r => r.reason === "wb"), pipeHit = res.some(r => r.reason === "pipebody"), pen = wbHit || pipeHit || group.length > 1;
-      if (pen) PLAY.stars = Math.max(0, PLAY.stars - 1);
-      setPlayMsg(wbHit ? "📦 Bị hộp gỗ chặn — mất ⭐" : pipeHit ? "🛢 Bị THÂN ỐNG chặn — phá ống (chui 2 đầu) trước! mất ⭐" : (group.length > 1 ? "🔗 Linked Snake kẹt — mất ⭐" : "⛔ Bị chặn — không thoát"));
-      if (pen) flashLose(); PLAY.flash = new Set(group.map(g => g.id)); drawPlay(); setTimeout(() => { PLAY.flash = null; if (PLAY.R) drawPlay(); }, 260); return;
+      const wbHit = res.some(r => r.reason === "wb"), pipeHit = res.some(r => r.reason === "pipebody");
+      PLAY.stars = Math.max(0, PLAY.stars - 1);   // MỌI va chạm (kể cả tông rắn khác) đều mất 1 ⭐
+      setPlayMsg(wbHit ? "📦 Bị hộp gỗ chặn — mất ⭐" : pipeHit ? "🛢 Bị THÂN ỐNG chặn — phá ống trước! mất ⭐" : (group.length > 1 ? "🔗 Linked Snake kẹt — mất ⭐" : "💥 Tông phải vật cản — mất ⭐"));
+      flashLose(); addBump(group); syncHud(); return;
     }
     const c = playGeom();
     const trajs = group.map(m => { const er = escapeRoute(m, others, R.items, W, H); return buildTraj(m, er.route, er.end, er.endDir, c, colorFor(m, 0)); });
@@ -456,7 +493,17 @@
     const step = () => {
       if (!PLAY.R) { PLAY.loopOn = false; return; }
       const c = drawPlay(), g = PLAY.ctx, tnow = now();
-      PLAY.anims = PLAY.anims.filter(an => { const e = tnow - an.t0, slid = e < accelT ? .5 * speed * (e * e / accelT) : speed * (e - accelT / 2); let alive = false; an.trajs.forEach(tr => { if (drawSliding(g, tr, slid, c)) alive = true; }); const rt = Math.min(1, e / 340); if (rt < 1) { g.save(); an.rings.forEach(rg => { g.globalAlpha = 1 - rt; g.strokeStyle = rg.color; g.lineWidth = 3; g.beginPath(); g.arc(rg.x * c + c / 2, rg.y * c + c / 2, c * .25 + rt * c, 0, 7); g.stroke(); }); g.restore(); } return alive || rt < 1; });
+      PLAY.anims = PLAY.anims.filter(an => {
+        const e = tnow - an.t0;
+        if (an.bump) {   // TRƯỢT TỚI vật cản -> BẬT NGƯỢC -> CHOÁNG 💫
+          const dur = 440; if (e >= dur) { an.bumps.forEach(b => PLAY.bumpingIds.delete(b.id)); return false; }
+          const p = e / dur; let f; if (p < .4) { const t = p / .4; f = 1 - (1 - t) * (1 - t); } else { const q = (p - .4) / .6; f = Math.cos(q * Math.PI) * (1 - q); }   // tiến (ease-out) rồi dội về, tắt dần
+          g.save(); an.bumps.forEach(b => { const tr = b.traj, ms = Math.max(0, tr.total - tr.bodyLen); drawSliding(g, tr, f * ms, c); }); g.restore();
+          if (p > .38) { g.font = `${Math.max(11, c * .5)}px sans-serif`; g.textAlign = "center"; g.textBaseline = "middle"; an.bumps.forEach(b => { const tr = b.traj, ms = Math.max(0, tr.total - tr.bodyLen), hp = tr.pt(Math.min(f * ms + tr.bodyLen, tr.total)); g.fillText("💫", hp.x + (Math.random() * 2 - 1) * 2, hp.y - c * .55); }); }
+          return true;
+        }
+        const slid = e < accelT ? .5 * speed * (e * e / accelT) : speed * (e - accelT / 2); let alive = false; an.trajs.forEach(tr => { if (drawSliding(g, tr, slid, c)) alive = true; }); const rt = Math.min(1, e / 340); if (rt < 1) { g.save(); an.rings.forEach(rg => { g.globalAlpha = 1 - rt; g.strokeStyle = rg.color; g.lineWidth = 3; g.beginPath(); g.arc(rg.x * c + c / 2, rg.y * c + c / 2, c * .25 + rt * c, 0, 7); g.stroke(); }); g.restore(); } return alive || rt < 1;
+      });
       if (PLAY.anims.length) fxRAF = requestAnimationFrame(step); else { PLAY.loopOn = false; drawPlay(); }
     };
     fxRAF = requestAnimationFrame(step);
