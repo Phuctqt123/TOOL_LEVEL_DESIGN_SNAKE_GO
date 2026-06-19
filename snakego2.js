@@ -17,15 +17,17 @@
   const PALETTE = [1, 5, 7, 11, 14, 20, 17, 26, 29, 35, 9, 23];   // chỉ số GAME_COLORS để tô vùng
   function cornerOut(type, dir) { const o = CORNER_OPEN[type], e = opp(dir); return e === o[0] ? o[1] : e === o[1] ? o[0] : null; }
   function dirOf(a, b) { const dx = Math.sign(b.x - a.x), dy = Math.sign(b.y - a.y); return dx === 1 ? "right" : dx === -1 ? "left" : dy === 1 ? "down" : "up"; }
+  function inRect(c, el) { return c.x >= el.x && c.x < el.x + el.w && c.y >= el.y && c.y < el.y + el.h; }
+  function cloneSnake(s) { return { id: s.id, dir: s.dir, cells: s.cells.map(c => ({ ...c })), link: s.link, mother: s.mother, fixedColor: s.fixedColor, ev: s.ev }; }
 
   const S = {
     W: 13, H: 13, shape: "rect", fill: 62, longPref: 55, minL: 2, maxL: 0, mother: false,
     diffMode: "range", diffMin: 0, diffMax: 100, count: 40,
-    items: { link: false, corner: false, wb: false, bh: false, pipe: false },
-    dens: { link: 40, corner: 25, wb: 25, bh: 15, pipe: 20 },
-    curve: [{ t: 0, v: 10 }, { t: 1, v: 92 }], imageMask: null, imgTh: 128,
+    items: { link: false, corner: false, wb: false, bh: false, pipe: false, elevator: false },
+    dens: { link: 40, corner: 25, wb: 25, bh: 15, pipe: 20, elevator: 50 },
+    curve: [{ t: 0, v: 10 }, { t: 1, v: 92 }], imageMask: null, imgTh: 128, elevatorTrap: false,
   };
-  const TOGGLE = [{ key: "link", label: "🔗 Linked Snake", unlock: 6 }, { key: "corner", label: "⌐ Corner", unlock: 11 }, { key: "wb", label: "📦 Wooden Box", unlock: 15 }, { key: "bh", label: "🕳 Black Hole", unlock: 31 }, { key: "pipe", label: "🛢 Pipe (đường hầm)", unlock: 41 }];
+  const TOGGLE = [{ key: "link", label: "🔗 Linked Snake", unlock: 6 }, { key: "corner", label: "⌐ Corner", unlock: 11 }, { key: "wb", label: "📦 Wooden Box", unlock: 15 }, { key: "elevator", label: "🛗 Elevator", unlock: 26 }, { key: "bh", label: "🕳 Black Hole", unlock: 31 }, { key: "pipe", label: "🛢 Pipe (đường hầm)", unlock: 41 }];
   const SHAPES = [["rect", "▭ Chữ nhật"], ["circle", "⬤ Tròn/elip"], ["diamond", "◆ Thoi"], ["donut", "◎ Donut"], ["image", "🖼️ Từ ảnh"]];
   const PRESETS = { linear: [{ t: 0, v: 10 }, { t: 1, v: 92 }], easein: [{ t: 0, v: 8 }, { t: .55, v: 22 }, { t: .82, v: 55 }, { t: 1, v: 96 }], scurve: [{ t: 0, v: 8 }, { t: .25, v: 18 }, { t: .5, v: 50 }, { t: .75, v: 82 }, { t: 1, v: 94 }], steps: [{ t: 0, v: 15 }, { t: .33, v: 15 }, { t: .34, v: 45 }, { t: .66, v: 45 }, { t: .67, v: 80 }, { t: 1, v: 80 }] };
 
@@ -79,20 +81,47 @@
   }
   function groupsOf(snakes) { const m = new Map(), solo = []; snakes.forEach(s => { if (s.link) (m.get(s.link) || m.set(s.link, []).get(s.link)).push(s); else solo.push([s]); }); return [...m.values(), ...solo]; }
   function cloneItems(it) { return { wb: it.wb.map(o => ({ ...o })), bh: it.bh.map(o => ({ ...o })), corner: it.corner.map(o => ({ ...o })), pipe: it.pipe.map(p => ({ cells: p.cells.map(c => ({ ...c })), n: (typeof p.n === "number" && p.n > 0) ? p.n : 3 })) }; }
-  function sg2Solve(snakes, items, W, H) {
-    let work = snakes.map(s => ({ id: s.id, dir: s.dir, cells: s.cells.map(c => ({ ...c })), link: s.link }));
-    const it = cloneItems(items); let guard = 0; const N0 = work.length + 4;
-    while (work.length && guard++ < N0) {
+  function sg2Solve(snakes, items, W, H, elevator) {
+    let work = snakes.map(cloneSnake); let cur = elevator ? -1 : 0;   // -1 = tầng trên cùng (rắn ngoài lấn vùng), chưa trồi tầng ẩn
+    const it = cloneItems(items); let guard = 0; const N0 = work.length + (elevator ? elevator.layers.reduce((a, l) => a + l.length, 0) + elevator.layers.length : 0) + 10;
+    while (guard++ < N0) {
+      let promoted = false;   // ELEVATOR: vùng SẠCH RẮN -> trồi tầng ẩn kế
+      if (elevator && cur < elevator.layers.length - 1 && !work.some(sn => sn.cells.some(c => inRect(c, elevator)))) { cur++; elevator.layers[cur].forEach(s => work.push(cloneSnake(s))); promoted = true; }
       const groups = groupsOf(work), escaping = [], usedPipes = [];
       for (const g of groups) { const others = work.filter(o => g.indexOf(o) < 0); const rs = g.map(m => rayResolve(m, others, it, W, H)); if (rs.every(r => r.ok && r.removed)) { escaping.push(g); rs.forEach(r => r.pipes && r.pipes.forEach(p => usedPipes.push(p))); } }
-      const flat = escaping.flat(); if (!flat.length) break;
-      work = work.filter(o => flat.indexOf(o) < 0);
-      for (let i = 0; i < flat.length; i++) it.wb.forEach(w => w.n--); it.wb = it.wb.filter(w => w.n > 0);
-      usedPipes.forEach(p => p.n--); it.pipe = it.pipe.filter(p => p.n > 0);   // pipe được chui qua -> giảm; 0 -> vỡ
+      const flat = escaping.flat();
+      if (flat.length) { work = work.filter(o => flat.indexOf(o) < 0); for (let i = 0; i < flat.length; i++) it.wb.forEach(w => w.n--); it.wb = it.wb.filter(w => w.n > 0); usedPipes.forEach(p => p.n--); it.pipe = it.pipe.filter(p => p.n > 0); }
+      if (!flat.length && !promoted) break;
     }
-    return { solvable: work.length === 0 };
+    return { solvable: work.length === 0 && (!elevator || cur >= elevator.layers.length - 1) };
   }
-  function solvableWith(s, it, W, H) { return sg2Solve(s, it, W, H).solvable; }
+  function solvableWith(s, it, W, H, elevator) { return sg2Solve(s, it, W, H, elevator).solvable; }
+  // Giải đợt (không elevator) -> trả về các con CÒN KẸT.
+  function solveStuck(snakes, items, W, H) {
+    let work = snakes.map(cloneSnake); const it = cloneItems(items); let guard = 0; const N0 = work.length + 4;
+    while (work.length && guard++ < N0) {
+      const groups = groupsOf(work), esc = [], up = [];
+      for (const g of groups) { const others = work.filter(o => g.indexOf(o) < 0); const rs = g.map(m => rayResolve(m, others, it, W, H)); if (rs.every(r => r.ok && r.removed)) { esc.push(g); rs.forEach(r => r.pipes && r.pipes.forEach(p => up.push(p))); } }
+      const flat = esc.flat(); if (!flat.length) break;
+      work = work.filter(o => flat.indexOf(o) < 0); for (let i = 0; i < flat.length; i++) it.wb.forEach(w => w.n--); it.wb = it.wb.filter(w => w.n > 0); up.forEach(p => p.n--); it.pipe = it.pipe.filter(p => p.n > 0);
+    }
+    return work;
+  }
+  // BẪY "giải phóng sớm": dọn vùng (giữ nguyên rắn ngoài) -> tầng trồi -> đếm rắn TẦNG bị KẸT (đối đầu rắn ngoài).
+  function elevatorTrapCount(snakes, items, W, H, elevator) {
+    if (!elevator || !elevator.layers.length) return 0;
+    const layer = elevator.layers[0];
+    const overlap = snakes.filter(s => s.cells.some(c => inRect(c, elevator))), nonOverlap = snakes.filter(s => !s.cells.some(c => inRect(c, elevator)));
+    let work = overlap.map(cloneSnake); const walls = nonOverlap.map(cloneSnake); let guard = 0;   // dọn vùng với rắn ngoài làm TƯỜNG
+    while (work.length && guard++ < overlap.length + 4) {
+      const groups = groupsOf(work), esc = [];
+      for (const g of groups) { const others = work.filter(o => g.indexOf(o) < 0).concat(walls); if (g.every(m => { const r = rayResolve(m, others, items, W, H); return r.ok && r.removed; })) esc.push(g); }
+      const flat = esc.flat(); if (!flat.length) break; work = work.filter(o => flat.indexOf(o) < 0);
+    }
+    if (work.length) return 0;   // không dọn được vùng nếu không đụng rắn ngoài -> không có bẫy
+    const stuck = solveStuck(nonOverlap.concat(layer.map(cloneSnake)), items, W, H);
+    return stuck.filter(s => layer.some(ls => ls.id === s.id)).length;   // số rắn tầng kẹt đối đầu
+  }
   // 1 con rắn ở TRẠNG THÁI ĐẦU (xét cả rắn khác) có thoát được không — để kiểm tra vật phẩm có ĐẢO tính hợp lệ.
   function rayEscapesCtx(snake, snakes, items, W, H) { const r = rayResolve(snake, snakes.filter(o => o !== snake), items, W, H); return !!(r.ok && r.removed); }
   function escStates(snakes, items, W, H) { return snakes.map(sn => sn.mother ? false : rayEscapesCtx(sn, snakes, items, W, H)); }
@@ -109,13 +138,16 @@
     w -= items.bh.length * 4;
     return clamp(w, -20, 42);
   }
-  function sg2Difficulty(snakes, items, W, H) {
+  function sg2Difficulty(snakes, items, W, H, elevator) {
     const N = snakes.length; if (!N) return { score: 0, tier: "—", emoji: "" };
     const pieces = snakes.map((s, i) => ({ id: i + 1, dir: s.dir, cells: s.cells.map(c => ({ ...c })) }));
     let base = 0; if (typeof computeDifficulty === "function") { const d = computeDifficulty(pieces, W, H); if (d && typeof d.score === "number") base = d.score; }
-    const score = clamp(Math.round(base + itemWeight(snakes, items, N)), 0, 100);
-    const [, tier, emoji] = TIERS.find(t => score < t[0]);
-    return { score, tier, emoji };
+    const evTerm = elevator ? clamp(6 + elevator.layers.length * 5, 0, 28) : 0;
+    let score = clamp(Math.round(base + itemWeight(snakes, items, N) + evTerm), 0, 100);
+    const trap = elevator ? elevatorTrapCount(snakes, items, W, H, elevator) : 0;
+    score += trap * 2;   // mỗi rắn tầng đối-đầu-gây-thua-nếu-trồi-sớm: +2 (TỔNG có thể vượt 100)
+    const [, tier, emoji] = TIERS.find(t => Math.min(score, 100) < t[0]);
+    return { score, tier, emoji, trap };
   }
 
   // ============================ SINH ============================
@@ -219,11 +251,34 @@
     snakes.filter(s => s.link).forEach(s => { let x = s.cells[0].x, y = s.cells[0].y; const d = DZ[s.dir]; for (let k = 0; k < W + H; k++) { x += d.x; y += d.y; if (x < 0 || y < 0 || x >= W || y >= H) break; f.add(x + "," + y); } });
     return f;
   }
+  // ELEVATOR: chọn vùng chữ nhật >5×5 đặt BẤT KỲ trên bàn.
+  function placeElevator(W, H, shapeMask) {
+    for (let tries = 0; tries < 50; tries++) {
+      const ew = 5 + rnd(2), eh = 5 + rnd(2); if (ew > W - 2 || eh > H - 2) continue;
+      const ex = rnd(W - ew + 1), ey = rnd(H - eh + 1);
+      let ok = true; const cells = new Set();
+      for (let y = ey; y < ey + eh && ok; y++) for (let x = ex; x < ex + ew; x++) { if (shapeMask && !shapeMask.has(x + "," + y)) { ok = false; break; } cells.add(x + "," + y); }
+      if (ok) return { x: ex, y: ey, w: ew, h: eh, cells };
+    }
+    return null;
+  }
+  // Tầng ẩn: rắn map BÌNH THƯỜNG (generateMap) GIAM trong vùng -> bố trí đa dạng, hướng tự nhiên, dài ≥2, tương tác như thường.
+  function buildElevatorLayers(elCells, nLayers, W, H, diff) {
+    const layers = []; let id = 3000;
+    for (let li = 0; li < nLayers; li++) {
+      const m = generateMap(W, H, 45, diff, 0, { fill: 0.82, mask: elCells });
+      if (!m || !m.length) return null;
+      layers.push(m.map(p => ({ id: id++, dir: p.dir, cells: p.cells.map(c => ({ x: c.x, y: c.y })), ev: 1 })));
+    }
+    return layers;
+  }
   function genOne(target) {
     const W = S.W, H = S.H, shapeMask = buildMask(S.shape, W, H);
     let linked = [], reserved = null;
     if (S.items.link) { const r = placeLinkedGroup(W, H, shapeMask, Math.max(1, Math.round(S.dens.link / 100 * 2))); linked = r.snakes; if (r.reserved.size) reserved = r.reserved; }
-    let genMask = shapeMask;
+    let elRect = null;
+    if (S.items.elevator) { elRect = placeElevator(W, H, shapeMask); if (!elRect) return null; }
+    let genMask = shapeMask;   // rắn ngoài lấp CẢ vùng Elevator (top layer lấn được); chỉ chừa ô reserve của Linked
     if (reserved) { genMask = new Set(); const all = shapeMask ? [...shapeMask] : (() => { const a = []; for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) a.push(x + "," + y); return a; })(); all.forEach(k => { if (!reserved.has(k)) genMask.add(k); }); }
     const base = generateMap(W, H, S.longPref, target != null ? target : (S.diffMin + S.diffMax) / 2, 0, { fill: S.fill / 100, mask: genMask });
     if (!base || base.length < 1) return null;
@@ -233,23 +288,38 @@
     linked.forEach(s => snakes.push(s));
     if (snakes.length < 2) return null;
     if (S.mother && typeof buildMother === "function") { const internal = snakes.map(s => ({ id: s.id, dir: s.dir, cells: s.cells.map(c => ({ ...c })) })); let mo = []; try { mo = buildMother(internal, W, H, 1, shapeMask ? Array.from(shapeMask) : null) || []; } catch (e) { mo = []; } mo.forEach((m, k) => snakes.push({ id: 900 + k, dir: m.dir, cells: m.cells.map(c => ({ x: c.x, y: c.y })), link: null, mother: true })); }
+    let elevator = null;
+    if (elRect) {
+      const emptyIt = { wb: [], bh: [], corner: [], pipe: [] }, diff = target != null ? target : 50;
+      for (let att = 0; att < (S.elevatorTrap ? 14 : 1); att++) {   // tích Bẫy -> thử nhiều tầng tới khi ra bẫy
+        const layers = buildElevatorLayers(elRect.cells, 1, W, H, diff); if (!layers) continue;
+        const ev = { x: elRect.x, y: elRect.y, w: elRect.w, h: elRect.h, layers };
+        if (!solvableWith(snakes, emptyIt, W, H, ev)) continue;
+        if (!S.elevatorTrap || elevatorTrapCount(snakes, emptyIt, W, H, ev) > 0) { elevator = ev; break; }
+      }
+      if (!elevator) return null;
+    }   // CHỈ 1 tầng ẩn
     const area = shapeMask ? shapeMask.size : W * H;
     let cov = 0; snakes.forEach(s => cov += s.cells.length);
-    if (Math.round(cov / area * 100) < S.fill - 3) return null;   // fill thực phải >= (X−3)%
-    // CẤM vật phẩm trên LANE rắn link (đường thẳng phía trước) -> không tách nhóm
-    const forbid = linkedLanes(snakes, W, H); let itemMask = shapeMask;
-    if (forbid.size) { itemMask = new Set(); for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) { const k = x + "," + y; if ((!shapeMask || shapeMask.has(k)) && !forbid.has(k)) itemMask.add(k); } }
+    if (area > 0 && Math.round(cov / area * 100) < S.fill - 3) return null;   // fill thực phải >= (X−3)%
     const items = { wb: [], bh: [], corner: [], pipe: [] };
-    if (S.items.corner) tryAddItems(snakes, items, W, H, itemMask, "corner", Math.max(1, Math.round(S.dens.corner / 100 * area / 16)));
-    if (S.items.wb) tryAddItems(snakes, items, W, H, itemMask, "wb", Math.max(1, Math.round(S.dens.wb / 100 * area / 18)));
-    if (S.items.pipe) tryAddPipes(snakes, items, W, H, itemMask, Math.max(1, Math.round(S.dens.pipe / 100 * area / 30)));
-    if (S.items.bh) tryAddItems(snakes, items, W, H, itemMask, "bh", Math.max(1, Math.round(S.dens.bh / 100 * area / 30)));
-    if (!solvableWith(snakes, items, W, H)) return null;
+    if (!S.items.elevator) {   // v1: level Elevator chưa kèm vật phẩm khác
+      const forbid = linkedLanes(snakes, W, H); let itemMask = shapeMask;
+      if (forbid.size) { itemMask = new Set(); for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) { const k = x + "," + y; if ((!shapeMask || shapeMask.has(k)) && !forbid.has(k)) itemMask.add(k); } }
+      const A = shapeMask ? shapeMask.size : W * H;
+      if (S.items.corner) tryAddItems(snakes, items, W, H, itemMask, "corner", Math.max(1, Math.round(S.dens.corner / 100 * A / 16)));
+      if (S.items.wb) tryAddItems(snakes, items, W, H, itemMask, "wb", Math.max(1, Math.round(S.dens.wb / 100 * A / 18)));
+      if (S.items.pipe) tryAddPipes(snakes, items, W, H, itemMask, Math.max(1, Math.round(S.dens.pipe / 100 * A / 30)));
+      if (S.items.bh) tryAddItems(snakes, items, W, H, itemMask, "bh", Math.max(1, Math.round(S.dens.bh / 100 * A / 30)));
+    }
+    if (!solvableWith(snakes, items, W, H, elevator)) return null;
     // Cụm Linked phải BỊ CHẶN lúc mới vào (không thoát ngay) -> loại nếu thoát được ngay
     for (const g of groupsOf(snakes).filter(g => g.length > 1)) { const others = snakes.filter(o => g.indexOf(o) < 0); if (g.every(m => { const r = rayResolve(m, others, items, W, H); return r.ok && r.removed; })) return null; }
-    const d = sg2Difficulty(snakes, items, W, H); if (d.tier === "KẸT") return null;
+    const d = sg2Difficulty(snakes, items, W, H, elevator); if (d.tier === "KẸT") return null;
+    if (S.elevatorTrap && S.items.elevator && !d.trap) return null;   // tích "Bẫy elevator" -> CHỈ giữ level có bẫy
     zoneColor(snakes, W, H);
-    return { id: nextId++, W, H, snakes, items, score: d.score, tier: d.tier, emoji: d.emoji, shapeName: S.shape };
+    if (elevator) elevator.layers.forEach((layer, li) => layer.forEach((s, i) => { s.fixedColor = ((PALETTE[i % PALETTE.length] - 1 + li * 7) % 48) + 1; }));   // tô màu tầng
+    return { id: nextId++, W, H, snakes, items, score: d.score, tier: d.tier, emoji: d.emoji, shapeName: S.shape, ...(elevator ? { elevator } : {}), ...(d.trap ? { trap: d.trap } : {}) };
   }
 
   // ============================ ĐƯỜNG CONG ============================
@@ -325,10 +395,23 @@
       g.save(); g.strokeStyle = "rgba(255,255,255,.6)"; g.setLineDash([5, 4]); g.lineWidth = 2; rrect(g, a * c + 2.5, b * c + 2.5, (x2 - a + 1) * c - 5, (y2 - b + 1) * c - 5, c * .28); g.stroke(); g.setLineDash([]);
       g.fillStyle = "rgba(255,255,255,.92)"; g.font = `700 ${Math.max(9, c * .34)}px sans-serif`; g.textAlign = "center"; g.textBaseline = "middle"; g.fillText("🔗", (a + x2 + 1) / 2 * c, b * c + c * .16); g.restore(); });
   }
+  function drawElevator(g, el, c, cur, nLayers) {
+    const x = el.x * c, y = el.y * c, w = el.w * c, h = el.h * c; g.save();
+    const gr = g.createLinearGradient(x, y, x, y + h); gr.addColorStop(0, "rgba(255,190,70,.20)"); gr.addColorStop(1, "rgba(255,140,40,.10)"); g.fillStyle = gr; g.fillRect(x, y, w, h);
+    g.strokeStyle = "rgba(255,190,70,.85)"; g.lineWidth = Math.max(2, c * .1); g.setLineDash([7, 5]); g.strokeRect(x + 1, y + 1, w - 2, h - 2); g.setLineDash([]);
+    g.strokeStyle = "#ffd27a"; g.lineWidth = Math.max(2, c * .13); const L = c * .55; g.lineCap = "round";
+    [[x, y, 1, 1], [x + w, y, -1, 1], [x, y + h, 1, -1], [x + w, y + h, -1, -1]].forEach(([cx, cy, sx, sy]) => { g.beginPath(); g.moveTo(cx + sx * L, cy); g.lineTo(cx, cy); g.lineTo(cx, cy + sy * L); g.stroke(); });
+    const bw = Math.min(w, c * 2.6), bh = Math.max(12, c * .46); g.fillStyle = "rgba(20,12,0,.62)"; rrect(g, x, y, bw, bh, 6); g.fill();
+    g.fillStyle = "#ffd98a"; g.font = `800 ${Math.max(9, c * .3)}px sans-serif`; g.textAlign = "left"; g.textBaseline = "middle"; g.fillText(`🛗 ${cur + 2}/${nLayers + 1}`, x + 4, y + bh / 2 + 1);   // stage: top + N tầng ẩn
+    g.restore();
+  }
   function drawLevel(g, level, c, runtime, hide, selSet) {
     const W = level.W, H = level.H, it = runtime ? runtime.items : level.items; let snakes = runtime ? runtime.snakes : level.snakes;
     if (hide) snakes = snakes.filter(s => !hide.has(s.id));
-    drawGrid(g, W, H, c); drawItems(g, it, c);
+    drawGrid(g, W, H, c);
+    const el = runtime ? runtime.elevator : level.elevator;
+    if (el) drawElevator(g, el, c, runtime ? el.cur : -1, el.layers.length);
+    drawItems(g, it, c);
     snakes.forEach((s, i) => drawSnakeBody(g, s, i, c, selSet && selSet.has(s.id) ? { glow: "#fff" } : null));
     drawLinkAnchors(g, snakes, c);
   }
@@ -350,6 +433,8 @@
     const meta = document.createElement("div"); meta.className = "sg2-card-meta"; const items = []; const I = lvl.items;
     if (I.wb.length) items.push("📦" + I.wb.length); if (I.bh.length) items.push("🕳" + I.bh.length); if (I.corner.length) items.push("⌐" + I.corner.length); if (I.pipe.length) items.push("🛢" + I.pipe.length);
     const nLink = new Set(lvl.snakes.filter(s => s.link).map(s => s.link)).size; if (nLink) items.push("🔗" + nLink);
+    if (lvl.elevator) items.push("🛗" + lvl.elevator.layers.length);
+    if (lvl.trap) items.push("⚠️" + lvl.trap);
     meta.innerHTML = `<span>#${lvl.id} · ${lvl.snakes.length}🐍</span><span>${items.join(" ")}</span>`; card.appendChild(meta);
     const act = document.createElement("div"); act.className = "sg2-card-act";
     const mk = (t, fn, cls) => { const b = document.createElement("button"); b.textContent = t; if (cls) b.className = cls; b.title = t; b.addEventListener("click", e => { e.stopPropagation(); fn(); }); return b; };
@@ -419,7 +504,17 @@
   }
   function openPlay(lvl) { ensurePlayModal(); $("sg2PlayTitle").textContent = `#${lvl.id} · ${lvl.tier} (${lvl.score})`; startRun(lvl); $("sg2PlayBd").classList.add("show"); }
   function closePlay() { const bd = $("sg2PlayBd"); if (bd) bd.classList.remove("show"); cancelAnimationFrame(fxRAF); PLAY.loopOn = false; PLAY.anims = []; PLAY.bumpingIds.clear(); PLAY.lvl = null; PLAY.R = null; }
-  function startRun(lvl) { cancelAnimationFrame(fxRAF); PLAY.loopOn = false; PLAY.anims = []; PLAY.bumpingIds.clear(); PLAY.lvl = lvl; PLAY.stars = 3; PLAY.R = { snakes: lvl.snakes.map(s => ({ id: s.id, dir: s.dir, cells: s.cells.map(c => ({ ...c })), link: s.link, mother: s.mother, fixedColor: s.fixedColor })), items: cloneItems(lvl.items) }; const w = $("sg2Win"); if (w) w.classList.remove("show"); setPlayMsg("Bấm 1 con rắn để bắn nó ra khỏi bàn."); drawPlay(); }
+  function promoteElevator(R) {   // vùng trống -> trồi tầng kế; trả về id các rắn tầng mới (cho hiệu ứng)
+    const el = R.elevator; if (!el) return null; let pop = null;
+    while (el.cur < el.layers.length - 1 && !R.snakes.some(sn => sn.cells.some(c => inRect(c, el)))) { el.cur++; const added = el.layers[el.cur].map(cloneSnake); added.forEach(s => R.snakes.push(s)); pop = pop || new Set(); added.forEach(s => pop.add(s.id)); }
+    return pop;
+  }
+  function startRun(lvl) {
+    cancelAnimationFrame(fxRAF); PLAY.loopOn = false; PLAY.anims = []; PLAY.bumpingIds.clear(); PLAY.lvl = lvl; PLAY.stars = 3;
+    PLAY.R = { snakes: lvl.snakes.map(cloneSnake), items: cloneItems(lvl.items) };
+    if (lvl.elevator) { PLAY.R.elevator = { x: lvl.elevator.x, y: lvl.elevator.y, w: lvl.elevator.w, h: lvl.elevator.h, layers: lvl.elevator.layers, cur: -1 }; promoteElevator(PLAY.R); }   // tầng trên = rắn ngoài (đã lấn vùng); tầng ẩn trồi sau
+    const w = $("sg2Win"); if (w) w.classList.remove("show"); setPlayMsg("Bấm 1 con rắn để bắn nó ra khỏi bàn."); drawPlay();
+  }
   function playGeom() { const lvl = PLAY.lvl, max = Math.min(560, (window.innerWidth || 800) - 80, (window.innerHeight || 800) - 230); return Math.max(14, Math.floor(max / Math.max(lvl.W, lvl.H))); }
   function syncHud() { $("sg2PlayStars").textContent = "⭐".repeat(PLAY.stars) + "☆".repeat(Math.max(0, 3 - PLAY.stars)); $("sg2PlayLeft").textContent = "🐍 " + PLAY.R.snakes.length; }
   function setCanvasSize() { const lvl = PLAY.lvl, c = playGeom(), dpr = Math.min(2, window.devicePixelRatio || 1); PLAY.cv.width = lvl.W * c * dpr; PLAY.cv.height = lvl.H * c * dpr; PLAY.cv.style.width = lvl.W * c + "px"; PLAY.cv.style.height = lvl.H * c + "px"; PLAY.ctx.setTransform(dpr, 0, 0, dpr, 0, 0); return c; }
@@ -486,7 +581,11 @@
     R.items.wb.filter(w => w.n <= 0).forEach(w => rings.push({ x: w.x, y: w.y, color: "#caa06a" })); R.items.wb = R.items.wb.filter(w => w.n > 0);
     const usedPipes = []; res.forEach(r => r.pipes && r.pipes.forEach(p => usedPipes.push(p)));   // pipe đã chui qua -> giảm số
     usedPipes.forEach(p => p.n--); R.items.pipe.filter(p => p.n <= 0).forEach(p => p.cells.forEach(cc => rings.push({ x: cc.x, y: cc.y, color: "#5cb0ff" }))); R.items.pipe = R.items.pipe.filter(p => p.n > 0);
-    PLAY.anims.push({ trajs, rings, t0: now() }); setPlayMsg(""); syncHud(); if (!R.snakes.length) celebrate(); ensureFxLoop();
+    const pop = promoteElevator(R);   // ELEVATOR: vùng trống -> trồi tầng kế
+    if (pop) { pop.forEach(id => PLAY.bumpingIds.add(id)); PLAY.anims.push({ elpop: true, ids: pop, t0: now() }); }   // hiệu ứng trồi (ẩn khỏi vẽ thường, anim tự vẽ)
+    PLAY.anims.push({ trajs, rings, t0: now() }); syncHud();
+    if (!R.snakes.length) celebrate(); else if (!anySnakeCanEscape(R)) showLoss(); else setPlayMsg(pop ? "🛗 Tầng trong vừa trồi lên!" : "");
+    ensureFxLoop();
   }
   function ensureFxLoop() {
     if (PLAY.loopOn) return; PLAY.loopOn = true; const speed = playGeom() / 68, accelT = 150;
@@ -495,6 +594,16 @@
       const c = drawPlay(), g = PLAY.ctx, tnow = now();
       PLAY.anims = PLAY.anims.filter(an => {
         const e = tnow - an.t0;
+        if (an.elpop) {   // ELEVATOR: tầng mới TRỒI LÊN (trong vùng) + chớp viền
+          const el = PLAY.R.elevator, dur = 460; if (!el || e >= dur) { an.ids.forEach(id => PLAY.bumpingIds.delete(id)); return false; }
+          const p = e / dur, ease = 1 - (1 - p) * (1 - p), ra = 1 - ease;
+          g.save();
+          g.strokeStyle = `rgba(255,215,100,${0.9 * (1 - p)})`; g.lineWidth = c * .2 * (1 - p) + 2; g.strokeRect(el.x * c, el.y * c, el.w * c, el.h * c);
+          g.beginPath(); g.rect(el.x * c, el.y * c, el.w * c, el.h * c); g.clip();
+          const oy = ra * el.h * c;   // tầng ẩn TRỒI LÊN từ dưới vùng
+          PLAY.R.snakes.forEach((s, i) => { if (an.ids.has(s.id)) drawSnakeBody(g, s, i, c, { oy, alpha: Math.min(1, p * 1.6), glow: "rgba(255,210,90,.5)" }); });
+          g.restore(); return true;
+        }
         if (an.bump) {   // TRƯỢT TỚI vật cản -> BẬT NGƯỢC -> CHOÁNG 💫
           const dur = 440; if (e >= dur) { an.bumps.forEach(b => PLAY.bumpingIds.delete(b.id)); return false; }
           const p = e / dur; let f; if (p < .4) { const t = p / .4; f = 1 - (1 - t) * (1 - t); } else { const q = (p - .4) / .6; f = Math.cos(q * Math.PI) * (1 - q); }   // tiến (ease-out) rồi dội về, tắt dần
@@ -510,6 +619,8 @@
   }
   function flashLose() { const m = $("sg2PlayModal"), f = $("sg2Flash"); if (m) { m.classList.remove("shake"); void m.offsetWidth; m.classList.add("shake"); } if (f) { f.classList.remove("on"); void f.offsetWidth; f.classList.add("on"); } }
   function celebrate() { const w = $("sg2Win"); if (!w) return; w.innerHTML = `<div class="sg2-win-emo">🎉</div><div class="sg2-win-title">Hoàn thành!</div><div class="sg2-win-stars">${"⭐".repeat(PLAY.stars)}${"☆".repeat(Math.max(0, 3 - PLAY.stars))}</div>`; w.classList.remove("show"); void w.offsetWidth; w.classList.add("show"); setPlayMsg("🎉 Hoàn thành!"); }
+  function anySnakeCanEscape(R) { const W = PLAY.lvl.W, H = PLAY.lvl.H; return groupsOf(R.snakes).some(g => { const others = R.snakes.filter(o => g.indexOf(o) < 0); return g.every(m => { const r = rayResolve(m, others, R.items, W, H); return r.ok && r.removed; }); }); }
+  function showLoss() { const w = $("sg2Win"); if (!w) return; w.innerHTML = `<div class="sg2-win-emo">💀</div><div class="sg2-win-title">Bí rồi!</div><div class="sg2-win-stars" style="font-size:15px;letter-spacing:0">Không nước nào thoát — Chơi lại</div>`; w.classList.remove("show"); void w.offsetWidth; w.classList.add("show"); setPlayMsg("💀 Bí rồi! (giải phóng Elevator quá sớm?)"); }
 
   // ============================ GIAO DIỆN (params trái · preview giữa · vật phẩm+sinh phải · thư viện full) ============================
   function mount() {
@@ -556,9 +667,14 @@
 
     const tg = $("sg2Toggles");
     TOGGLE.forEach(t => { const box = document.createElement("div"); box.className = "sg2-itemrow";
-      box.innerHTML = `<label class="chk sg2-toggle"><input type="checkbox" data-tk="${t.key}"${S.items[t.key] ? " checked" : ""}> ${t.label} <span class="sg2-unlock">lv ${t.unlock}</span></label><label class="fld sg2-dens" style="display:${S.items[t.key] ? "flex" : "none"}">Mật độ <b data-dv="${t.key}">${S.dens[t.key]}</b>%<input type="range" data-dk="${t.key}" min="5" max="100" value="${S.dens[t.key]}"></label>`;
-      box.querySelector("input[type=checkbox]").addEventListener("change", e => { S.items[t.key] = e.target.checked; box.querySelector(".sg2-dens").style.display = e.target.checked ? "flex" : "none"; });
-      box.querySelector("input[type=range]").addEventListener("input", e => { S.dens[t.key] = +e.target.value; box.querySelector("[data-dv='" + t.key + "']").textContent = e.target.value; }); tg.appendChild(box); });
+      const sub = t.key === "elevator"
+        ? `<label class="chk sg2-dens" style="display:${S.items[t.key] ? "flex" : "none"};font-size:12px"><input type="checkbox" id="sg2ElTrap"${S.elevatorTrap ? " checked" : ""}> ⚠️ Bẫy elevator (ép sinh — giải phóng sớm = thua)</label>`
+        : `<label class="fld sg2-dens" style="display:${S.items[t.key] ? "flex" : "none"}">Mật độ <b data-dv="${t.key}">${S.dens[t.key]}</b>%<input type="range" data-dk="${t.key}" min="5" max="100" value="${S.dens[t.key]}"></label>`;
+      box.innerHTML = `<label class="chk sg2-toggle"><input type="checkbox" data-tk="${t.key}"${S.items[t.key] ? " checked" : ""}> ${t.label} <span class="sg2-unlock">lv ${t.unlock}</span></label>${sub}`;
+      box.querySelector("input[type=checkbox][data-tk]").addEventListener("change", e => { S.items[t.key] = e.target.checked; box.querySelector(".sg2-dens").style.display = e.target.checked ? "flex" : "none"; });
+      if (t.key === "elevator") box.querySelector("#sg2ElTrap").addEventListener("change", e => S.elevatorTrap = e.target.checked);
+      else box.querySelector("input[type=range]").addEventListener("input", e => { S.dens[t.key] = +e.target.value; box.querySelector("[data-dv='" + t.key + "']").textContent = e.target.value; });
+      tg.appendChild(box); });
 
     $("sg2Shape").addEventListener("change", e => { S.shape = e.target.value; $("sg2ImgRow").style.display = e.target.value === "image" ? "block" : "none"; drawPreview(); });
     $("sg2ImgBtn").addEventListener("click", () => $("sg2ImgFile").click());
