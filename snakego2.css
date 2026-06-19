@@ -38,6 +38,11 @@
 .sg2-card-cv canvas { display: block; width: 100%; image-rendering: pixelated; background: #0e1424; }
 .sg2-card-ov { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
   font-size: 26px; color: #fff; background: rgba(0,0,0,.42); opacity: 0; transition: opacity .18s; }
+/* cờ BẪY ở góc thẻ */
+.sg2-trap-flag { position: absolute; top: 5px; right: 5px; z-index: 2; pointer-events: none;
+  font-size: 10px; font-weight: 900; letter-spacing: .3px; color: #fff; padding: 2px 6px; border-radius: 999px;
+  background: linear-gradient(180deg, #ff5d5d, #d92b2b); border: 1px solid rgba(255,255,255,.5);
+  box-shadow: 0 2px 6px rgba(0,0,0,.45); }
 .sg2-card:hover .sg2-card-ov { opacity: 1; }
 .sg2-card-meta { display: flex; align-items: center; justify-content: space-between; font-size: 11px; color: var(--muted); }
 .sg2-card-act { display: flex; gap: 6px; }

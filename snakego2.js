@@ -236,36 +236,6 @@
     }
     return made;
   }
-  // LINKED SNAKE: chọn ĐẦU từ các Ô CÒN TRỐNG (xáo trộn rồi duyệt) — không random toàn board.
-  // k≥2 con song song, mỗi con dài L≥2 (2–3). HƯỚNG BẤT KỲ (không ép quay vào trong);
-  // "không thoát được ngay khi vào map" do cửa cuối genOne lo (loại nếu cả cụm bắn ra được).
-  function placeLinkedGroup(W, H, mask, want) {
-    const groups = [], reserved = new Set(); let lid = 1, nid = 700;
-    const free = (x, y) => x >= 0 && y >= 0 && x < W && y < H && (!mask || mask.has(x + "," + y)) && !reserved.has(x + "," + y);
-    for (let gi = 0; gi < want; gi++) {
-      const open = []; for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) if (free(x, y)) open.push({ x, y });   // ô trống hiện tại
-      for (let i = open.length - 1; i > 0; i--) { const j = rnd(i + 1), t = open[i]; open[i] = open[j]; open[j] = t; }   // xáo trộn
-      let placed = false;
-      for (let ci = 0; ci < open.length && !placed; ci++) {
-        const head = open[ci], dirs = ["up", "right", "down", "left"];
-        for (let i = 3; i > 0; i--) { const j = rnd(i + 1), t = dirs[i]; dirs[i] = dirs[j]; dirs[j] = t; }   // thử các hướng ngẫu nhiên
-        for (const dir of dirs) {
-          const D = DZ[dir], perp = (dir === "up" || dir === "down") ? { x: 1, y: 0 } : { x: 0, y: 1 };
-          const k = 2 + rnd(2), L = 2 + rnd(2), lines = [], allCells = []; let ok = true;   // (head.x,head.y)=đầu con 0; thân lùi ngược hướng
-          for (let s = 0; s < k && ok; s++) {
-            const line = [];
-            for (let t = 0; t < L; t++) { const X = head.x + perp.x * s - D.x * t, Y = head.y + perp.y * s - D.y * t; if (!free(X, Y)) { ok = false; break; } line.push({ x: X, y: Y }); allCells.push({ x: X, y: Y }); }
-            if (ok) lines.push(line);
-          }
-          if (!ok) continue;
-          lines.forEach(line => groups.push({ id: nid++, dir, cells: line, link: lid }));   // gán id KHI CHỐT cụm (không leak)
-          allCells.forEach(c => reserved.add(c.x + "," + c.y)); lid++; placed = true; break;
-        }
-      }
-      if (!placed) break;   // hết chỗ -> dừng
-    }
-    return { snakes: groups, reserved };
-  }
   // Đường thoát của cụm Linked có dính HỐ ĐEN / ĐƯỜNG HẦM không? (rắn dính nhau, item lẻ làm tách -> không nhận)
   function linkedRouteBad(g, items, W, H) {
     const ri = { wb: [], bh: items.bh, corner: items.corner, pipe: items.pipe };   // bỏ wb (chặn tạm) để thấy bh/pipe phía sau; bỏ rắn khác để xem đường đi thật của cụm
@@ -278,7 +248,7 @@
     const free = (x, y) => x >= 0 && y >= 0 && x < W && y < H && (!mask || mask.has(x + "," + y)) && !used.has(x + "," + y);
     const open = []; for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) if (free(x, y)) open.push({ x, y });
     for (let i = open.length - 1; i > 0; i--) { const j = rnd(i + 1), t = open[i]; open[i] = open[j]; open[j] = t; }
-    let budget = 240;
+    let budget = 160, solveTries = 0;   // chặn cả số ô thử lẫn số lần kiểm giải-được (tránh chậm)
     for (const head of open) {
       const dirs = ["up", "right", "down", "left"]; for (let i = 3; i > 0; i--) { const j = rnd(i + 1), t = dirs[i]; dirs[i] = dirs[j]; dirs[j] = t; }
       for (const dir of dirs) {
@@ -288,8 +258,42 @@
         for (let s = 0; s < k && ok; s++) { const line = []; for (let t = 0; t < L; t++) { const X = head.x + perp.x * s - D.x * t, Y = head.y + perp.y * s - D.y * t; if (!free(X, Y)) { ok = false; break; } line.push({ x: X, y: Y }); } if (ok) lines.push(line); }
         if (!ok) continue;
         g.forEach((sn, s) => { sn.dir = dir; sn.cells = lines[s]; });   // đặt thử
-        const escapes = g.every(m => { const r = rayResolve(m, others, items, W, H); return r.ok && r.removed; });
-        if (!escapes && !linkedRouteBad(g, items, W, H) && solvableWith(snakes, items, W, H, elevators)) return true;   // kẹt + đường thoát sạch bh/pipe + vẫn giải được -> chốt
+        if (g.every(m => { const r = rayResolve(m, others, items, W, H); return r.ok && r.removed; })) continue;   // còn thoát ngay -> chỗ khác
+        if (linkedRouteBad(g, items, W, H)) continue;                                                              // route dính bh/pipe -> chỗ khác
+        if (++solveTries > 8) return false;                                                                        // quá nhiều lần kiểm giải-được -> bỏ
+        if (solvableWith(snakes, items, W, H, elevators)) return true;                                             // kẹt + sạch + giải được -> chốt
+      }
+    }
+    return false;
+  }
+  // Đặt 1 cụm Linked TRONG VÒNG round (sau khi đã có rắn ngoài/item): chọn đầu từ ô trống, k≥2 song song dài L≥2,
+  // hướng bất kỳ; CHỈ chốt khi: KẸT lúc đầu + đường thoát sạch bh/pipe + map VẪN giải được. Trả true nếu đặt được.
+  function placeOneLinked(snakes, items, W, H, mask, elevators) {
+    const used = cellsUsed(snakes, items);
+    const free = (x, y) => x >= 0 && y >= 0 && x < W && y < H && (!mask || mask.has(x + "," + y)) && !used.has(x + "," + y);
+    const open = []; for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) if (free(x, y)) open.push({ x, y });
+    for (let i = open.length - 1; i > 0; i--) { const j = rnd(i + 1), t = open[i]; open[i] = open[j]; open[j] = t; }
+    const lid = 1 + snakes.reduce((m, s) => s.link ? Math.max(m, s.link) : m, 0), base = 700 + snakes.filter(s => s.link).length;
+    let budget = 140, solveTries = 0;
+    for (const head of open) {
+      const dirs = ["up", "right", "down", "left"]; for (let i = 3; i > 0; i--) { const j = rnd(i + 1), t = dirs[i]; dirs[i] = dirs[j]; dirs[j] = t; }
+      for (const dir of dirs) {
+        if (budget-- <= 0) return false;
+        const D = DZ[dir], perp = (dir === "up" || dir === "down") ? { x: 1, y: 0 } : { x: 0, y: 1 };
+        const k = 2 + rnd(2), L = 2 + rnd(2), lines = []; let ok = true;
+        for (let s = 0; s < k && ok; s++) { const line = []; for (let t = 0; t < L; t++) { const X = head.x + perp.x * s - D.x * t, Y = head.y + perp.y * s - D.y * t; if (!free(X, Y)) { ok = false; break; } line.push({ x: X, y: Y }); } if (ok) lines.push(line); }
+        if (!ok) continue;
+        const grp = lines.map((line, idx) => ({ id: base + idx, dir, cells: line, link: lid }));
+        grp.forEach(s => snakes.push(s));
+        const others = snakes.filter(o => grp.indexOf(o) < 0);
+        const escapes = grp.every(m => { const r = rayResolve(m, others, items, W, H); return r.ok && r.removed; });
+        let good = false;
+        if (!escapes && !linkedRouteBad(grp, items, W, H)) {
+          if (++solveTries > 8) { grp.forEach(s => { const i = snakes.indexOf(s); if (i >= 0) snakes.splice(i, 1); }); return false; }
+          if (solvableWith(snakes, items, W, H, elevators)) good = true;
+        }
+        if (good) return true;
+        grp.forEach(s => { const i = snakes.indexOf(s); if (i >= 0) snakes.splice(i, 1); });   // undo, thử chỗ khác
       }
     }
     return false;
@@ -334,19 +338,14 @@
   }
   function genOne(target) {
     const W = S.W, H = S.H, shapeMask = buildMask(S.shape, W, H);
-    let linked = [], reserved = null;
-    if (S.items.link) { const Al = shapeMask ? shapeMask.size : W * H; const r = placeLinkedGroup(W, H, shapeMask, clamp(Math.round(Al / 40), 1, 6)); linked = r.snakes; if (r.reserved.size) reserved = r.reserved; }   // luật "MỌI cụm phải kẹt" -> giới hạn khả thi (≈4 ở board 13)
     let elRects = [];
     if (S.items.elevator) {   // ĐẶT NHIỀU vùng Elevator tới khi không nhét được nữa (không giới hạn)
       const avoid = new Set(), elCap = clamp(Math.round((shapeMask ? shapeMask.size : W * H) / 90), 1, 3);   // mỗi vùng = 1 ràng buộc "giải được" -> giới hạn khả thi
       for (let i = 0; i < elCap; i++) { const r = placeElevator(W, H, shapeMask, avoid); if (!r) break; r.cells.forEach(k => avoid.add(k)); elRects.push(r); }
     }   // không đặt nổi vùng nào (board nhỏ) -> elRects rỗng -> map thường, KHÔNG loại
-    let genMask = shapeMask;   // rắn ngoài lấp CẢ vùng Elevator (top layer lấn được); chỉ chừa ô reserve của Linked
-    if (reserved) { genMask = new Set(); const all = shapeMask ? [...shapeMask] : (() => { const a = []; for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) a.push(x + "," + y); return a; })(); all.forEach(k => { if (!reserved.has(k)) genMask.add(k); }); }
-    const base = generateMap(W, H, S.longPref, target != null ? target : (S.diffMin + S.diffMax) / 2, 0, { fill: S.fill / 100, mask: genMask, minLen: S.minL, maxLen: S.maxL });   // sinh ĐÚNG dải độ dài ngay từ đầu
+    const base = generateMap(W, H, S.longPref, target != null ? target : (S.diffMin + S.diffMax) / 2, 0, { fill: S.fill / 100, mask: shapeMask, minLen: S.minL, maxLen: S.maxL });   // sinh ĐÚNG dải độ dài ngay từ đầu
     if (!base || base.length < 1) return null;
-    const snakes = base.map((p, i) => ({ id: i + 1, dir: p.dir, cells: p.cells.map(c => ({ x: c.x, y: c.y })), link: null }));
-    linked.forEach(s => snakes.push(s));
+    const snakes = base.map((p, i) => ({ id: i + 1, dir: p.dir, cells: p.cells.map(c => ({ x: c.x, y: c.y })), link: null }));   // Linked đặt trong VÒNG round (không còn pre-placement)
     if (snakes.length < 2) return null;
     if (S.mother && typeof buildMother === "function") { const internal = snakes.map(s => ({ id: s.id, dir: s.dir, cells: s.cells.map(c => ({ ...c })) })); let mo = []; try { mo = buildMother(internal, W, H, 1, shapeMask ? Array.from(shapeMask) : null) || []; } catch (e) { mo = []; } mo.forEach((m, k) => snakes.push({ id: 900 + k, dir: m.dir, cells: m.cells.map(c => ({ x: c.x, y: c.y })), link: null, mother: true })); }
     let elevators = null;
@@ -383,18 +382,32 @@
       if (forbid.size) { itemMask = new Set(); for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) { const k = x + "," + y; if ((!shapeMask || shapeMask.has(k)) && !forbid.has(k)) itemMask.add(k); } }
       const A = (itemMask ? itemMask.size : W * H);   // ĐẶT THEO VÒNG: mỗi lượt qua từng loại đặt 1 cái; dừng khi cả vòng không loại nào đặt được
       const bhCap = Math.max(1, Math.round(W * H / 80));   // HỐ ĐEN có trần theo diện tích board (20×20 -> 5)
-      const kinds = []; if (S.items.corner) kinds.push("corner"); if (S.items.wb) kinds.push("wb"); if (S.items.pipe) kinds.push("pipe"); if (S.items.bh) kinds.push("bh");
+      const kinds = []; if (S.items.link) kinds.push("link"); if (S.items.corner) kinds.push("corner"); if (S.items.wb) kinds.push("wb"); if (S.items.pipe) kinds.push("pipe"); if (S.items.bh) kinds.push("bh");   // 🔗 Linked Ở TRONG VÒNG (đặt đầu vì cụm to, cần chỗ trước)
       let progress = true, rounds = 0;
       while (progress && rounds++ < A + 4) {
         progress = false;
         for (const k of kinds) {   // lia qua từng loại dù đặt được hay không (thử tới 18 ô khác nhau/lượt)
           if (k === "bh" && items.bh.length >= bhCap) continue;   // 🕳 đã đủ trần -> bỏ qua
-          const got = k === "pipe" ? tryAddPipes(snakes, items, W, H, itemMask, 1, elevators, 18) : tryAddItems(snakes, items, W, H, itemMask, k, 1, elevators, 18);
+          const got = k === "link" ? (placeOneLinked(snakes, items, W, H, itemMask, elevators) ? 1 : 0)
+                    : k === "pipe" ? tryAddPipes(snakes, items, W, H, itemMask, 1, elevators, 18)
+                    : tryAddItems(snakes, items, W, H, itemMask, k, 1, elevators, 18);
           if (got > 0) progress = true;
         }
       }
     }
-    if (!solvableWith(snakes, items, W, H, elevators)) return null;
+    if (!solvableWith(snakes, items, W, H, elevators)) {   // map bí -> thử BỎ cụm Linked gây bí (thay vì loại cả map)
+      const drop = g => g.forEach(m => { const i = snakes.indexOf(m); if (i >= 0) snakes.splice(i, 1); });
+      let solved = false;
+      for (const g of groupsOf(snakes).filter(gr => gr.length > 1)) {   // (1) thử bỏ TỪNG cụm; cứu được thì giữ bỏ, không thì trả lại
+        drop(g);
+        if (solvableWith(snakes, items, W, H, elevators)) { solved = true; break; }
+        g.forEach(m => snakes.push(m));   // cụm này không phải thủ phạm -> trả lại, thử cụm khác
+      }
+      if (!solved) {   // (2) không cụm đơn nào cứu -> bỏ HẾT linked thử lần cuối; vẫn bí (không do linked) -> mới loại map
+        groupsOf(snakes).filter(gr => gr.length > 1).forEach(drop);
+        if (!solvableWith(snakes, items, W, H, elevators)) return null;
+      }
+    }
     // Cụm Linked phải: (a) BỊ CHẶN lúc mới vào, (b) đường thoát KHÔNG dính bh/pipe (rắn dính nhau, item lẻ làm tách).
     // Vi phạm -> DỜI sang chỗ khác; không dời được -> BỎ riêng cụm đó (KHÔNG loại map).
     for (const g of groupsOf(snakes).filter(gr => gr.length > 1)) {
@@ -517,7 +530,9 @@
     const badge = document.createElement("span"); badge.className = "tierbadge " + (TIER_CLASS[tierIdx(lvl.tier)] || "tier1"); badge.textContent = lvl.score + " " + (lvl.emoji || "");
     top.append(chk, badge); card.appendChild(top);
     const wrap = document.createElement("div"); wrap.className = "sg2-card-cv"; const cc = document.createElement("canvas"); cc._card = card; drawThumb(cc, lvl);
-    const ov = document.createElement("div"); ov.className = "sg2-card-ov"; ov.textContent = "▶"; wrap.append(cc, ov); wrap.addEventListener("click", () => openPlay(lvl)); card.appendChild(wrap);
+    const ov = document.createElement("div"); ov.className = "sg2-card-ov"; ov.textContent = "▶"; wrap.append(cc, ov);
+    if (lvl.trap) { const tf = document.createElement("div"); tf.className = "sg2-trap-flag"; tf.textContent = "⚠️ BẪY" + (lvl.trap > 1 ? " ×" + lvl.trap : ""); tf.title = "Có bẫy giải-phóng-sớm: " + lvl.trap; wrap.appendChild(tf); }
+    wrap.addEventListener("click", () => openPlay(lvl)); card.appendChild(wrap);
     const meta = document.createElement("div"); meta.className = "sg2-card-meta"; const items = []; const I = lvl.items;
     if (I.wb.length) items.push("📦" + I.wb.length); if (I.bh.length) items.push("🕳" + I.bh.length); if (I.corner.length) items.push("⌐" + I.corner.length); if (I.pipe.length) items.push("🛢" + I.pipe.length);
     const nLink = new Set(lvl.snakes.filter(s => s.link).map(s => s.link)).size; if (nLink) items.push("🔗" + nLink);
