@@ -436,7 +436,8 @@ function generateMap(w, h, longPref, difficulty, wrapping, opts) {
   const mask = (opts && opts.mask) || null, overflow = (opts && opts.overflow) || 0;
   const fill = (opts && opts.fill != null) ? opts.fill : 0.65;
   const bounds = (opts && opts.bounds) || null;
-  const maxL = mask ? 6 : 8;
+  const minLen = (opts && opts.minLen > 2) ? opts.minLen : 2;                 // chủ động giới hạn độ dài (mặc định như cũ)
+  const maxL = (opts && opts.maxLen > 0) ? opts.maxLen : (mask ? 6 : 8);
   const inArea = k => !mask || mask.has(k);
   const allow = kk => {
     if (bounds) { const i = kk.indexOf(","), x = +kk.slice(0, i), y = +kk.slice(i + 1);
@@ -467,13 +468,14 @@ function generateMap(w, h, longPref, difficulty, wrapping, opts) {
     // Độ dài MONG MUỐN giảm dần theo độ phủ -> ĐẶT RẮN DÀI TRƯỚC, rắn ngắn lấp khe sau.
     // longPref cao -> giữ rắn dài lâu hơn (ít rắn vụn). Vẫn ưu tiên rắn dài hơn qua wLen + chấm điểm.
     const frac = targetCov ? covered.size / targetCov : 1;
-    const Lwant = Math.max(2, Math.round(maxL - frac * (1 - lp * 0.5) * (maxL - 2)));
+    const Lwant = Math.max(minLen, Math.round(maxL - frac * (1 - lp * 0.5) * (maxL - 2)));
     let best = null, bestScore = -Infinity;
     for (let s = 0; s < 18; s++) {
       tries++;
       const [hx, hy] = pickHead();
       const cand = growSnake(hx, hy, DIRS[rint(4)], Lwant, pieces, w, h, id, allow);
       if (!cand) continue;
+      if (cand.cells.length < minLen) continue;                                // bỏ ứng viên ngắn hơn min (chủ động)
       const test = pieces.concat([cand]);
       if (!solve(test, w, h).solvable) continue;
       const m = depMetrics(test, w, h);
