@@ -1116,7 +1116,7 @@ self.onmessage = function (e) {
     let minx = W, maxx = 0, miny = H, maxy = 0;
     cells.forEach(k => { const i = k.indexOf(","), x = +k.slice(0, i), y = +k.slice(i + 1); if (x < minx) minx = x; if (x > maxx) maxx = x; if (y < miny) miny = y; if (y > maxy) maxy = y; });
     const spanx = maxx - minx + 1, spany = maxy - miny + 1, cx = (minx + maxx) / 2, cy = (miny + maxy) / 2;
-    const modes = ["stripesV", "stripesH", "diagNW", "diagNE", "quad", "pie", "rings", "xcross", "frames", "grid", "cornerFan"], mode = modes[rint(modes.length)];
+    const modes = ["stripesV", "stripesH", "diagNW", "diagNE", "quad", "pie", "rings", "xcross", "frames", "grid", "cornerFan", "chevron", "diagGrid", "radial", "arch"], mode = modes[rint(modes.length)];
     const K = clamp(2 + rint(4), 2, 6);   // 2..5 dải/múi/vành
     const gk = clamp(2 + rint(2), 2, 3), corner = [[minx, miny], [maxx, miny], [minx, maxy], [maxx, maxy]][rint(4)];   // tham số cho grid / cornerFan
     const labelOf = (x, y) => {
@@ -1131,6 +1131,10 @@ self.onmessage = function (e) {
       if (mode === "frames") return Math.min(K - 1, Math.floor(Math.max(Math.abs(dx) / (spanx / 2 || 1), Math.abs(dy) / (spany / 2 || 1)) * K));   // khung VUÔNG đồng tâm
       if (mode === "grid") return Math.floor((x - minx) / spanx * gk) + gk * Math.floor((y - miny) / spany * gk);                                  // lưới ô (patchwork)
       if (mode === "cornerFan") { const ang = Math.atan2(Math.abs(y - corner[1]), Math.abs(x - corner[0])); return Math.min(K - 1, Math.floor(ang / (Math.PI / 2 + 1e-9) * K)); }   // quạt từ 1 góc
+      if (mode === "chevron") return Math.min(K - 1, Math.floor((Math.abs(dx) + (y - miny)) / (spanx / 2 + spany) * K));   // dải chữ V
+      if (mode === "diagGrid") { const a = Math.min(gk - 1, Math.floor(((x - minx) + (y - miny)) / (spanx + spany) * gk)), b = Math.min(gk - 1, Math.floor(((x - minx) + (maxy - y)) / (spanx + spany) * gk)); return a + gk * b; }   // patchwork thoi 45°
+      if (mode === "radial") { const rr = Math.min(1, Math.floor(Math.hypot(dx / (spanx / 2 || 1), dy / (spany / 2 || 1)))); return rr * 4 + (dx >= 0 ? 1 : 0) + (dy >= 0 ? 2 : 0); }   // bia: vành × góc phần tư
+      if (mode === "arch") return Math.min(K - 1, Math.floor(Math.hypot((x - cx) / (spanx / 2 || 1), (y - maxy) / (spany || 1)) * K));   // vòng cung (cầu vồng)
       return (Math.abs(dx) * spany >= Math.abs(dy) * spanx) ? (dx >= 0 ? 0 : 1) : (dy >= 0 ? 2 : 3);   // xcross: 4 tam giác
     };
     const zm = Array.from({ length: H }, () => Array(W).fill(0));
