@@ -22,7 +22,7 @@
 
   const S = {
     W: 13, H: 13, shape: "rect", fill: 62, longPref: 55, minL: 2, maxL: 0, mother: false, obsFill: 0,
-    diffMode: "range", diffMin: 0, diffMax: 100, count: 40,
+    diffMode: "range", diffMin: 0, diffMax: 100, count: 40, colorStyle: "pattern",   // 'pattern' | 'scatter' | 'mix'
     items: { link: false, corner: false, wb: false, bh: false, pipe: false, elevator: false },
     dens: { link: 40, corner: 25, wb: 25, bh: 15, pipe: 20, elevator: 50 },
     curve: [{ t: 0, v: 10 }, { t: 1, v: 92 }], imageMask: null, maskImg: null, imgTh: 128, imgHarsh: 40, elevatorTrap: false,
@@ -257,19 +257,6 @@
     }
     return made;
   }
-  // OBSTACLE "trơn": chỉ chặn ô, KHÔNG cần đảo hợp lệ -> lấp ô trống tới `want`; chỉ giữ nếu map VẪN giải được.
-  function placeObstacles(s, it, W, H, mask, elevators, want) {
-    if (want <= 0) return 0;
-    const E = emptyCells(s, it, W, H, mask);
-    for (let i = E.length - 1; i > 0; i--) { const j = rnd(i + 1), t = E[i]; E[i] = E[j]; E[j] = t; }
-    const pick = E.slice(0, Math.min(want, E.length)); if (!pick.length) return 0;
-    pick.forEach(c => it.obs.push({ x: c.x, y: c.y }));               // thử CẢ LÔ -> kiểm 1 lần (nhanh khi không phá giải)
-    if (solvableWith(s, it, W, H, elevators)) return pick.length;
-    it.obs.length -= pick.length;                                    // lô làm bí -> bỏ lô, đặt TỪNG cái có kiểm
-    let added = 0;
-    for (const c of pick) { it.obs.push({ x: c.x, y: c.y }); if (solvableWith(s, it, W, H, elevators)) added++; else it.obs.pop(); }
-    return added;
-  }
   // Đường thoát của cụm Linked có dính HỐ ĐEN / ĐƯỜNG HẦM không? (rắn dính nhau, item lẻ làm tách -> không nhận)
   function linkedRouteBad(g, items, W, H) {
     const ri = { wb: [], bh: items.bh, corner: items.corner, pipe: items.pipe };   // bỏ wb (chặn tạm) để thấy bh/pipe phía sau; bỏ rắn khác để xem đường đi thật của cụm
@@ -334,15 +321,6 @@
     }
     return false;
   }
-  // TÔ MÀU THEO VÙNG (BFS-Voronoi) -> fixedColor mỗi rắn (y tinh thần Snake 1)
-  function zoneColor(snakes, W, H) {
-    const cells = []; snakes.forEach(s => { if (!s.mother) s.cells.forEach(c => cells.push(c)); });
-    if (!cells.length) return;
-    const K = clamp(3 + Math.round(cells.length / 90), 3, 6), seeds = []; for (let i = 0; i < K; i++) seeds.push(cells[rnd(cells.length)]);
-    const off = rnd(48), zc = seeds.map((_, i) => ((PALETTE[i % PALETTE.length] - 1 + off) % 48) + 1);
-    snakes.forEach(s => { if (s.mother) { s.fixedColor = 0; return; } const h = s.cells[0]; let bi = 0, bd = 1e9; seeds.forEach((sd, i) => { const d = (sd.x - h.x) ** 2 + (sd.y - h.y) ** 2; if (d < bd) { bd = d; bi = i; } }); s.fixedColor = zc[bi]; });
-  }
-
   // ============================ TÔ MÀU CHUYÊN NGHIỆP (port từ Snake Go 1) ============================
   // Bộ palette tuyển sẵn + sinh palette theo LÝ THUYẾT MÀU (analogous/bổ-túc/tam-giác/split/đơn-sắc)
   // -> mỗi level một bộ màu hài hoà KHÁC nhau (đa dạng thật), vùng kề luôn tương phản theo ΔE CIELAB.
@@ -439,8 +417,9 @@
     let minx = W, maxx = 0, miny = H, maxy = 0;
     cells.forEach(k => { const i = k.indexOf(","), x = +k.slice(0, i), y = +k.slice(i + 1); if (x < minx) minx = x; if (x > maxx) maxx = x; if (y < miny) miny = y; if (y > maxy) maxy = y; });
     const spanx = maxx - minx + 1, spany = maxy - miny + 1, cx = (minx + maxx) / 2, cy = (miny + maxy) / 2;
-    const modes = ["stripesV", "stripesH", "diagNW", "diagNE", "quad", "pie", "rings", "xcross"], mode = modes[rnd(modes.length)];
+    const modes = ["stripesV", "stripesH", "diagNW", "diagNE", "quad", "pie", "rings", "xcross", "frames", "grid", "cornerFan"], mode = modes[rnd(modes.length)];
     const K = clamp(2 + rnd(4), 2, 6);   // 2..5 dải/múi/vành
+    const gk = clamp(2 + rnd(2), 2, 3), corner = [[minx, miny], [maxx, miny], [minx, maxy], [maxx, maxy]][rnd(4)];   // tham số cho grid / cornerFan
     const labelOf = (x, y) => {
       const dx = x - cx, dy = y - cy;
       if (mode === "stripesV") return Math.floor((x - minx) / spanx * K);
@@ -450,6 +429,9 @@
       if (mode === "quad") return (dx >= 0 ? 1 : 0) + (dy >= 0 ? 2 : 0);
       if (mode === "pie") { let a = Math.atan2(dy, dx) + Math.PI; return Math.min(K - 1, Math.floor(a / (2 * Math.PI + 1e-9) * K)); }
       if (mode === "rings") { const r = Math.hypot(dx / (spanx / 2 || 1), dy / (spany / 2 || 1)); return Math.min(K - 1, Math.floor(r * K)); }
+      if (mode === "frames") return Math.min(K - 1, Math.floor(Math.max(Math.abs(dx) / (spanx / 2 || 1), Math.abs(dy) / (spany / 2 || 1)) * K));   // khung VUÔNG đồng tâm
+      if (mode === "grid") return Math.floor((x - minx) / spanx * gk) + gk * Math.floor((y - miny) / spany * gk);                                  // lưới ô (patchwork)
+      if (mode === "cornerFan") { const ang = Math.atan2(Math.abs(y - corner[1]), Math.abs(x - corner[0])); return Math.min(K - 1, Math.floor(ang / (Math.PI / 2 + 1e-9) * K)); }   // quạt từ 1 góc
       return (Math.abs(dx) * spany >= Math.abs(dy) * spanx) ? (dx >= 0 ? 0 : 1) : (dy >= 0 ? 2 : 3);   // xcross: 4 tam giác
     };
     const zm = Array.from({ length: H }, () => Array(W).fill(0));
@@ -484,6 +466,27 @@
   function applyCloneColorsSnakes(snakes, cm, offset) {
     if (!cm) return; const remap = c => (c >= 1 && c <= 48) ? ((c - 1 + offset) % 48) + 1 : c;
     snakes.forEach(s => { if (s.mother) { s.fixedColor = 0; return; } const h = s.cells[0]; const col = (cm[h.y] || [])[h.x]; if (col >= 1) s.fixedColor = remap(col); });
+  }
+  // MÀU LỘN XỘN (không theo pattern vùng): MỖI rắn 1 màu NGẪU NHIÊN trong palette hài hoà; rắn KỀ khác màu -> tổ hợp hợp lý.
+  function scatterColor(snakes) {
+    const real = snakes.filter(s => !s.mother); if (!real.length) return;
+    const pal = Math.random() < 0.85 ? theoryPalette() : COLOR_PALETTES[rnd(COLOR_PALETTES.length)];
+    const idx = new Map(); real.forEach((s, i) => s.cells.forEach(c => idx.set(c.x + "," + c.y, i)));
+    const adj = real.map(() => new Set());
+    idx.forEach((i, k) => { const ci = k.indexOf(","), x = +k.slice(0, ci), y = +k.slice(ci + 1); for (const d of [[0, -1], [0, 1], [-1, 0], [1, 0]]) { const j = idx.get((x + d[0]) + "," + (y + d[1])); if (j != null && j !== i) { adj[i].add(j); adj[j].add(i); } } });
+    const order = real.map((_, i) => i); for (let i = order.length - 1; i > 0; i--) { const j = rnd(i + 1), t = order[i]; order[i] = order[j]; order[j] = t; }   // thứ tự ngẫu nhiên -> lộn xộn
+    const col = new Array(real.length).fill(0);
+    for (const i of order) {
+      const used = new Set(); adj[i].forEach(j => { if (col[j]) used.add(col[j]); });
+      let pool = pal.filter(c => !used.has(c)); if (!pool.length) pool = pal;
+      col[i] = pool[rnd(pool.length)]; real[i].fixedColor = col[i];
+    }
+    snakes.forEach(s => { if (s.mother) s.fixedColor = 0; });
+  }
+  // Dispatcher theo S.colorStyle: 'pattern' (lát cắt) | 'scatter' (lộn xộn hài hoà) | 'mix' (random/level).
+  function applyColoring(snakes, W, H) {
+    const style = S.colorStyle === "mix" ? (Math.random() < 0.5 ? "scatter" : "pattern") : S.colorStyle;
+    if (style === "scatter") scatterColor(snakes); else autoColorSnakes(snakes, W, H, null);
   }
   // ẢNH -> MẶT NẠ: lấy mẫu siêu nét (supersample ss×ss/ô) -> ô bật khi tỉ lệ pixel tối ≥ harsh. (như Snake Go 1)
   function computeMask(img, W, H, th, harsh) {
@@ -630,7 +633,7 @@
     if (S.items.elevator && S.elevatorTrap && !d.trap) return null;   // CHỈ ép khi BẬT Bẫy; tắt thì nhận cả bẫy ngẫu nhiên (không loại oan)
     if (S.cloneMode === "keep") applyCloneColorsSnakes(snakes, S.cloneColorMap, 0);            // giữ NGUYÊN màu gốc
     else if (S.cloneMode === "imitate") applyCloneColorsSnakes(snakes, S.cloneColorMap, 1 + rnd(47));   // bắt chước + xoay tông/level
-    else autoColorSnakes(snakes, W, H, null);   // 'auto' clone + sinh thường -> phối màu đa dạng theo lý thuyết màu
+    else applyColoring(snakes, W, H);   // 'auto' clone + sinh thường -> theo S.colorStyle (pattern / lộn xộn / trộn)
     if (elevators) elevators.forEach((el, ej) => el.layers.forEach((layer, li) => layer.forEach((s, i) => { s.fixedColor = ((PALETTE[i % PALETTE.length] - 1 + (li + ej) * 7) % 48) + 1; })));   // tô màu tầng
     return { id: nextId++, W, H, snakes, items, score: d.score, tier: d.tier, emoji: d.emoji, shapeName: S.shape, ...(elevators ? { elevators } : {}), ...(d.trap ? { trap: d.trap } : {}) };
   }
@@ -805,7 +808,7 @@
     CE.cv = $("sg2CeCv"); CE.ctx = CE.cv.getContext("2d"); CE.cv.addEventListener("click", ceClick);
     $("sg2CeClose").addEventListener("click", ceClose); $("sg2CeCancel").addEventListener("click", ceClose);
     $("sg2CeSave").addEventListener("click", ceSave); $("sg2CeAll").addEventListener("click", () => { CE.sel = new Set(CE.lvl.snakes.filter(s => !s.mother).map(s => s.id)); ceHint(); ceDraw(); });
-    $("sg2CeNone").addEventListener("click", () => { CE.sel.clear(); ceHint(); ceDraw(); }); $("sg2CeRand").addEventListener("click", () => { autoColorSnakes(CE.lvl.snakes, CE.lvl.W, CE.lvl.H, null); ceDraw(); });
+    $("sg2CeNone").addEventListener("click", () => { CE.sel.clear(); ceHint(); ceDraw(); }); $("sg2CeRand").addEventListener("click", () => { applyColoring(CE.lvl.snakes, CE.lvl.W, CE.lvl.H); ceDraw(); });
     bd.addEventListener("click", e => { if (e.target === bd) ceClose(); });
   }
   function openColorEd(lvl) { ensureColorEd(); CE.lvl = lvl; CE.sel.clear(); $("sg2CeTitle").textContent = "#" + lvl.id; ceHint(); ceDraw(); $("sg2CeBd").classList.add("show"); }
@@ -982,6 +985,7 @@
           <div class="card"><h2><span class="step-no">3</span> Tham số sinh</h2>
             <div class="row" style="align-items:flex-end"><label class="fld">Dài tối thiểu <input type="number" id="sg2MinL" min="2" max="40" value="2" style="width:66px"></label><label class="fld">Dài tối đa <input type="number" id="sg2MaxL" min="0" max="99" value="0" style="width:66px"></label></div>
             <div class="row" style="margin-top:6px"><label class="chk"><input type="checkbox" id="sg2Mother"> Rắn mẹ (viền ôm)</label></div>
+            <div class="row" style="margin-top:8px;align-items:flex-end"><label class="fld" style="flex:1">Kiểu màu<select id="sg2ColorStyle"><option value="pattern">Theo pattern (lát cắt)</option><option value="scatter">Lộn xộn (hài hoà)</option><option value="mix">Trộn (random mỗi level)</option></select></label></div>
           </div>
           <div class="card"><h2><span class="step-no">4</span> Vật phẩm</h2><div id="sg2Toggles"></div></div>
           <div class="card" id="sg2CloneCard" style="display:none"><h2><span class="step-no">🔁</span> Nhân bản theo bóng <span class="pill" id="sg2CloneSrc"></span></h2>
@@ -1038,6 +1042,7 @@
     $("sg2MinL").addEventListener("input", e => S.minL = clamp(+e.target.value || 2, 2, 40));
     $("sg2MaxL").addEventListener("input", e => S.maxL = clamp(+e.target.value || 0, 0, 99));
     $("sg2Mother").addEventListener("change", e => { S.mother = e.target.checked; drawPreview(); });
+    $("sg2ColorStyle").addEventListener("change", e => S.colorStyle = e.target.value);
     $("sg2Gen").addEventListener("click", runGen); $("sg2Cancel").addEventListener("click", () => { genCancel = true; });
     document.querySelectorAll(".sg2-prst").forEach(b => b.addEventListener("click", () => { S.curve = PRESETS[b.dataset.p].map(p => ({ ...p })); drawCurve(); }));
     $("sg2Sort").addEventListener("change", e => { sortMode = e.target.value; rebuildLib(); });
