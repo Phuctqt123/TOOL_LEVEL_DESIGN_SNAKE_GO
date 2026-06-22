@@ -116,6 +116,10 @@ header.top h1 span { background:linear-gradient(120deg,var(--accent),var(--accen
 #gridLayer .grid-line { stroke:var(--grid-line); stroke-width:1.5; }
 #gridLayer .grid-dot { fill:var(--grid-dot); }
 #gridLayer .grid-mask { fill:var(--grid-mask); }
+/* MÀN CHƠI: diện mạo như Snake Go 2 — nền navy đậm, lưới mảnh, không chấm giao điểm */
+#board.play { background:#0e1424; box-shadow:0 0 0 1px rgba(120,150,210,.18), var(--shadow-lg); }
+#board.play #gridLayer .grid-line { stroke:rgba(120,150,210,.10); stroke-width:1; }
+#board.play #gridLayer .grid-dot { display:none; }
 #pieceLayer g { transition:transform 140ms ease; }
 #pieceLayer g.flash { filter:brightness(.55) saturate(2.2); }
 #pieceLayer g.hintp { animation:pulsef .55s ease 2; }

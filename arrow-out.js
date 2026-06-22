@@ -747,7 +747,7 @@ function renderGrid() {
 // Hình học một con rắn: nét nối tâm các ô (đuôi -> đầu) + tam giác đầu.
 function arrowTri(head, d) {
   const px = -d.y, py = d.x;        // vector vuông góc
-  const t = CELL * 0.30, b = CELL * 0.15, back = CELL * 0.02;
+  const t = CELL * 0.52, b = CELL * 0.34, back = CELL * 0.0;   // đầu mũi tên to như Snake Go 2 (đáy ở tâm đầu)
   const tip = (head.x + d.x * t).toFixed(1) + "," + (head.y + d.y * t).toFixed(1);
   const bl = (head.x - d.x * back + px * b).toFixed(1) + "," + (head.y - d.y * back + py * b).toFixed(1);
   const br = (head.x - d.x * back - px * b).toFixed(1) + "," + (head.y - d.y * back - py * b).toFixed(1);
@@ -792,7 +792,7 @@ function drawPiece(svg, piece, opts) {
   const cidx = (piece.colorIdx != null) ? piece.colorIdx : piece.id;
   const color = (opts && opts.color) || (piece.mother ? "#e8c25a"
     : ((colorMode === "game" && piece.fixedColor >= 1 && gameColor(piece.fixedColor)) || pieceColor(cidx)));
-  const sw = Math.max(2, CELL * (piece.mother ? 0.15 : 0.10));   // rắn mẹ dày hơn (viền)
+  const sw = Math.max(2, CELL * (piece.mother ? 0.50 : 0.44));   // thân DÀY như Snake Go 2 (rắn mẹ dày hơn)
   const geom = pieceGeom(piece.cells, piece.dir);
   const g = svgEl("g");
   const line = svgEl("path");
