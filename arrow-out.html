@@ -207,6 +207,15 @@
           <label class="chk" id="bCloneAutoColorWrap" style="display:none" title="Khi NHÂN BẢN (⧉): bỏ qua màu mẫu, chỉ mượn LAYOUT; tự chia vài VÙNG LỚN (mỗi vùng 1 màu) rồi tô. (Tự-gen luôn tự thiết kế màu nên nút này chỉ hiện khi clone.)"><input type="checkbox" id="bCloneAutoColor" /> Tự thiết kế màu (clone)</label>
           <label class="chk" id="bCloneKeepColorWrap" style="display:none" title="Khi NHÂN BẢN (⧉): GIỮ NGUYÊN màu gốc của mẫu, chỉ clone CÁCH SẮP XẾP (không xoay/đổi màu). Loại trừ với 'Tự thiết kế màu'."><input type="checkbox" id="bCloneKeepColor" /> Clone màu (giữ nguyên)</label>
         </div>
+        <div class="row" style="margin-top:8px;align-items:flex-end">
+          <label class="fld" style="flex:1" title="Pattern = lát cắt đối xứng; Lộn xộn = mỗi rắn 1 màu hài hoà; Trộn = random mỗi level">Kiểu màu
+            <select id="bColorStyle">
+              <option value="pattern">Theo pattern (lát cắt)</option>
+              <option value="scatter">Lộn xộn (hài hoà)</option>
+              <option value="mix">Trộn (random mỗi level)</option>
+            </select>
+          </label>
+        </div>
         <div class="row" style="margin-top:10px">
           <button id="bGenerate" class="primary" style="flex:1">🎲 Sinh hàng loạt</button>
           <button id="bCancel" class="danger" style="display:none">■ Hủy</button>

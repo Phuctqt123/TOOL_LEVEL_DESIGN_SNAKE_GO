@@ -864,6 +864,7 @@ self.onmessage = function (e) {
       targets = sampleCurve(B.curve, count);
     }
     const trapPerN = trapMode ? 8 : 30;   // bẫy thao tác: ~1 bẫy/8 rắn (nhiều); thường ~1/30
+    const colorStyle = $b("bColorStyle") ? $b("bColorStyle").value : "pattern";   // 'pattern' | 'scatter' | 'mix'
     const W = B.W, H = B.H;
     // Vùng tô màu: clone -> B.cloneColorMap (cố định, để bắt chước/thiết kế); TỰ-GEN -> MỖI LEVEL tự chia
     // vùng NGẪU NHIÊN riêng (perLevelZones) -> pattern màu khác nhau từng level mà vẫn confine sạch.
@@ -888,7 +889,8 @@ self.onmessage = function (e) {
     const onAccept = (lvl, slot) => {
       lvl.id = startId + slot; lvl.slot = slot;
       if (cloneImitate) applyCloneColors(lvl.pieces);            // clone KHÔNG tích -> bắt chước màu mẫu (như bản cũ, không bẫy)
-      else autoColor(lvl.pieces, W, H, lvl.zoneMap || genZoneMap, trapPerN);   // tự-gen: vùng RIÊNG từng level; clone-tích: vùng cố định
+      else { const st = colorStyle === "mix" ? (Math.random() < 0.5 ? "scatter" : "pattern") : colorStyle;   // theo Kiểu màu
+        if (st === "scatter") scatterColor(lvl.pieces, W, H, trapPerN); else autoColor(lvl.pieces, W, H, lvl.zoneMap || genZoneMap, trapPerN); }
       if (lvl.zoneMap) delete lvl.zoneMap;   // chỉ dùng để tô, không lưu (đỡ nặng thư viện/export)
       if (trapMode) {   // bẫy thao tác: hàng mồi (genFull seed) + con bẫy CÙNG MÀU để trà trộn
         const bait = []; let hasTrap = false;
@@ -1114,8 +1116,9 @@ self.onmessage = function (e) {
     let minx = W, maxx = 0, miny = H, maxy = 0;
     cells.forEach(k => { const i = k.indexOf(","), x = +k.slice(0, i), y = +k.slice(i + 1); if (x < minx) minx = x; if (x > maxx) maxx = x; if (y < miny) miny = y; if (y > maxy) maxy = y; });
     const spanx = maxx - minx + 1, spany = maxy - miny + 1, cx = (minx + maxx) / 2, cy = (miny + maxy) / 2;
-    const modes = ["stripesV", "stripesH", "diagNW", "diagNE", "quad", "pie", "rings", "xcross"], mode = modes[rint(modes.length)];
+    const modes = ["stripesV", "stripesH", "diagNW", "diagNE", "quad", "pie", "rings", "xcross", "frames", "grid", "cornerFan"], mode = modes[rint(modes.length)];
     const K = clamp(2 + rint(4), 2, 6);   // 2..5 dải/múi/vành
+    const gk = clamp(2 + rint(2), 2, 3), corner = [[minx, miny], [maxx, miny], [minx, maxy], [maxx, maxy]][rint(4)];   // tham số cho grid / cornerFan
     const labelOf = (x, y) => {
       const dx = x - cx, dy = y - cy;
       if (mode === "stripesV") return Math.floor((x - minx) / spanx * K);
@@ -1125,6 +1128,9 @@ self.onmessage = function (e) {
       if (mode === "quad") return (dx >= 0 ? 1 : 0) + (dy >= 0 ? 2 : 0);                            // 4 góc (đối xứng tâm)
       if (mode === "pie") { let a = Math.atan2(dy, dx) + Math.PI; return Math.min(K - 1, Math.floor(a / (2 * Math.PI + 1e-9) * K)); }   // múi quạt
       if (mode === "rings") { const r = Math.hypot(dx / (spanx / 2 || 1), dy / (spany / 2 || 1)); return Math.min(K - 1, Math.floor(r * K)); }   // đồng tâm
+      if (mode === "frames") return Math.min(K - 1, Math.floor(Math.max(Math.abs(dx) / (spanx / 2 || 1), Math.abs(dy) / (spany / 2 || 1)) * K));   // khung VUÔNG đồng tâm
+      if (mode === "grid") return Math.floor((x - minx) / spanx * gk) + gk * Math.floor((y - miny) / spany * gk);                                  // lưới ô (patchwork)
+      if (mode === "cornerFan") { const ang = Math.atan2(Math.abs(y - corner[1]), Math.abs(x - corner[0])); return Math.min(K - 1, Math.floor(ang / (Math.PI / 2 + 1e-9) * K)); }   // quạt từ 1 góc
       return (Math.abs(dx) * spany >= Math.abs(dy) * spanx) ? (dx >= 0 ? 0 : 1) : (dy >= 0 ? 2 : 3);   // xcross: 4 tam giác
     };
     const zm = Array.from({ length: H }, () => Array(W).fill(0));
@@ -1301,6 +1307,23 @@ self.onmessage = function (e) {
     const offset = B.cloneExact ? 0 : (1 + Math.floor(Math.random() * 47));   // cloneExact -> GIỮ NGUYÊN màu gốc (không xoay hue)
     const remap = c => (c >= 1 && c <= 48) ? ((c - 1 + offset) % 48) + 1 : c;
     for (const p of pieces) { if (p.mother) continue; const c0 = cellXY(p.cells[0]); const col = (cm[c0.y] || [])[c0.x]; if (col >= 1) p.fixedColor = remap(col); }
+  }
+  // MÀU LỘN XỘN (không theo pattern vùng): MỖI rắn 1 màu NGẪU NHIÊN trong palette hài hoà; rắn KỀ khác màu -> tổ hợp hợp lý. Vẫn chèn bẫy màu.
+  function scatterColor(pieces, W, H, trapPerN) {
+    if (!pieces.length || typeof GAME_COLORS === "undefined") return;
+    const realIdx = pieces.map((p, i) => i).filter(i => !pieces[i].mother); if (!realIdx.length) return;
+    const pal = Math.random() < 0.85 ? theoryPalette() : COLOR_PALETTES[Math.floor(Math.random() * COLOR_PALETTES.length)];
+    const idx = new Map(); realIdx.forEach(i => { for (const c of pieces[i].cells) { const { x, y } = cellXY(c); idx.set(x + "," + y, i); } });
+    const adj = new Map(); realIdx.forEach(i => adj.set(i, new Set()));
+    idx.forEach((i, k) => { const ci = k.indexOf(","), x = +k.slice(0, ci), y = +k.slice(ci + 1); for (const d of [[0, -1], [0, 1], [-1, 0], [1, 0]]) { const j = idx.get((x + d[0]) + "," + (y + d[1])); if (j != null && j !== i) { adj.get(i).add(j); adj.get(j).add(i); } } });
+    const order = realIdx.slice(); for (let i = order.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)), t = order[i]; order[i] = order[j]; order[j] = t; }   // thứ tự ngẫu nhiên -> lộn xộn
+    const col = new Map();
+    for (const i of order) {
+      const used = new Set(); adj.get(i).forEach(j => { if (col.has(j)) used.add(col.get(j)); });
+      let pool = pal.filter(c => !used.has(c)); if (!pool.length) pool = pal;
+      const c = pool[Math.floor(Math.random() * pool.length)]; col.set(i, c); pieces[i].fixedColor = c;
+    }
+    injectTraps(pieces, W, H, trapPerN);   // giữ bẫy màu của Snake Go 1
   }
   // Tô PALETTE mới (clone tích tự-thiết-kế / tự-build): chia/đọc vùng -> tô hài hoà, vùng kề tương phản + bẫy màu.
   function autoColor(pieces, W, H, zoneMap, trapPerN) {
