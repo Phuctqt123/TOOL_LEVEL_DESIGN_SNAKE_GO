@@ -760,7 +760,7 @@
     const nLink = new Set(lvl.snakes.filter(s => s.link).map(s => s.link)).size; if (nLink) items.push("🔗" + nLink);
     { const e = evList(lvl); if (e.length) items.push("🛗" + e.length); }
     if (lvl.trap) items.push("⚠️" + lvl.trap);
-    meta.innerHTML = `<span>#${lvl.id} · ${lvl.snakes.length}🐍</span><span>${items.join(" ")}</span>`; card.appendChild(meta);
+    meta.innerHTML = `<span>${lvl.name ? lvl.name : "#" + lvl.id} · ${lvl.snakes.length}🐍</span><span>${items.join(" ")}</span>`; card.appendChild(meta);
     const act = document.createElement("div"); act.className = "sg2-card-act";
     const mk = (t, fn, cls) => { const b = document.createElement("button"); b.textContent = t; if (cls) b.className = cls; b.title = t; b.addEventListener("click", e => { e.stopPropagation(); fn(); }); return b; };
     const bSil = mk("🔁", () => cloneSilhouette(lvl)); bSil.title = "Nhân bản theo bóng (sinh loạt bản mới + chọn chế độ màu)";
@@ -1134,7 +1134,8 @@
       const s = { id: i + 1, dir, cells, link: null }, ci = aoColorIndex(a.ColorType); if (ci) s.fixedColor = ci; snakes.push(s);
     });
     if (!snakes.length) return null;
-    return { id: nextId++, W: w, H: h, snakes, items: emptyItems(), score: 0, tier: TIERS[0][1], emoji: "", shapeName: "rect" };   // KHÔNG tính độ khó (3404 level -> nặng)
+    const name = o._name || (o.LevelId != null ? "level_" + o.LevelId : null);   // giữ TÊN level gốc (vd "level_1")
+    return { id: nextId++, W: w, H: h, snakes, items: emptyItems(), score: 0, tier: TIERS[0][1], emoji: "", shapeName: "rect", ...(name ? { name } : {}), ...(o.LevelUId != null ? { srcUid: o.LevelUId } : {}) };   // KHÔNG tính độ khó (3404 level -> nặng)
   }
   // 1 object thô (bất kỳ định dạng) -> 1 level SG2, hoặc null nếu không nhận diện được.
   function coerceToSG2(o) {
