@@ -1112,9 +1112,34 @@
     if (src && src.shapeName) lvl.shapeName = src.shapeName;
     return lvl;
   }
+  // ---------- Adapter FORMAT "ArrowsOut" (game thật): Direction + ColorType + Indices (tự dò lật Y) ----------
+  const DIRMAP = { Up: "up", Down: "down", Left: "left", Right: "right" };
+  const AO_COLOR = { Blue: 1, DarkBlue: 2, Aqua: 28, SeaGreen: 25, Green: 10, ParrotGreen: 31, Yellow: 7, Orange: 19, Peach: 24, Red: 5, Pink: 16, Purple: 13, LightBrown: 34, DarkBrown: 40, Gray: 46, BlueishGray: 37, OffWhite: 48 };
+  function aoColorIndex(name) { if (!name) return 0; if (AO_COLOR[name]) return AO_COLOR[name]; let h = 0; for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0; return (h % 48) + 1; }   // tên lạ -> băm ra 1..48
+  function isArrowsOut(o) { return !!(o && (o.GameType === "ArrowsOut" || (Array.isArray(o.Arrows) && o.Arrows[0] && o.Arrows[0].ColorType !== undefined))); }
+  function aoNeedFlip(arrows, w, h) {   // chọn hướng (lật/không) khớp Direction ghi trong file ở NHIỀU arrow nhất
+    let no = 0, fl = 0;
+    for (const a of arrows) { const idx = a.Indices, want = DIRMAP[a.Direction]; if (!idx || idx.length < 2 || !want) continue;
+      if (dirOf({ x: idx[1] % w, y: Math.floor(idx[1] / w) }, { x: idx[0] % w, y: Math.floor(idx[0] / w) }) === want) no++;
+      if (dirOf({ x: idx[1] % w, y: h - 1 - Math.floor(idx[1] / w) }, { x: idx[0] % w, y: h - 1 - Math.floor(idx[0] / w) }) === want) fl++;
+    }
+    return fl > no;
+  }
+  function arrowsOutToSG2(o) {
+    const w = o.XSize, h = o.YSize, arrows = o.Arrows; if (!w || !h || !Array.isArray(arrows) || !arrows.length) return null;
+    const flip = aoNeedFlip(arrows, w, h), Y = row => flip ? (h - 1 - row) : row, snakes = [];
+    arrows.forEach((a, i) => { const idx = a.Indices || []; if (!idx.length) return;
+      const cells = idx.map(k => ({ x: k % w, y: Y(Math.floor(k / w)) }));
+      const dir = cells.length >= 2 ? dirOf(cells[1], cells[0]) : (DIRMAP[a.Direction] || "up");
+      const s = { id: i + 1, dir, cells, link: null }, ci = aoColorIndex(a.ColorType); if (ci) s.fixedColor = ci; snakes.push(s);
+    });
+    if (!snakes.length) return null;
+    return { id: nextId++, W: w, H: h, snakes, items: emptyItems(), score: 0, tier: TIERS[0][1], emoji: "", shapeName: "rect" };   // KHÔNG tính độ khó (3404 level -> nặng)
+  }
   // 1 object thô (bất kỳ định dạng) -> 1 level SG2, hoặc null nếu không nhận diện được.
   function coerceToSG2(o) {
     if (!o || typeof o !== "object") return null;
+    if (isArrowsOut(o)) return arrowsOutToSG2(o);   // FORMAT GAME "ArrowsOut" (ColorType/Direction) — phải bắt TRƯỚC isGameFormat
     if (Array.isArray(o.snakes)) {   // SG2 native
       const W = o.W || o.w, H = o.H || o.h; if (!W || !H) return null;
       const snakes = o.snakes.map((s, i) => { const ns = { id: s.id != null ? s.id : i + 1, dir: s.dir, cells: (s.cells || []).map(_xy), link: s.link != null ? s.link : null }; if (s.mother) ns.mother = true; if (typeof s.fixedColor === "number") ns.fixedColor = s.fixedColor; if (s.ev) ns.ev = s.ev; return ns; });
@@ -1138,7 +1163,7 @@
   function levelCandidates(data) {
     if (Array.isArray(data)) return data;
     if (data && Array.isArray(data.levels)) return data.levels;
-    if (data && (Array.isArray(data.snakes) || Array.isArray(data.pieces) || (typeof isGameFormat === "function" && isGameFormat(data)))) return [data];
+    if (data && (Array.isArray(data.snakes) || Array.isArray(data.pieces) || isArrowsOut(data) || (typeof isGameFormat === "function" && isGameFormat(data)))) return [data];
     return null;
   }
   // ---------- Giải nén ZIP (STORE + DEFLATE) — port từ Snake Go 1 ----------
@@ -1173,20 +1198,35 @@
     }
     return { levels, skipped };
   }
+  // Nạp theo LÔ: mỗi khung hình xử lý ~28ms rồi nhường trình duyệt -> hiện dần (import tới đâu thấy tới đó), không treo.
+  function ingestChunked(cand, onProg) {
+    return new Promise(resolve => {
+      let i = 0, added = 0, bad = 0; const N = cand.length;
+      const step = () => {
+        const t0 = now();
+        while (i < N && now() - t0 < 28) { const lv = coerceToSG2(cand[i++]); if (lv) { LIB.push(lv); SEL.add(lv.id); addCard(lv); added++; } else bad++; }
+        onProg(added, N);
+        if (i < N) requestAnimationFrame(step); else resolve({ added, bad });
+      };
+      step();
+    });
+  }
   async function importFiles(files) {
     if (!files || !files.length) return; let added = 0, bad = 0, skipped = 0;
-    $("sg2SelInfo").textContent = "⏳ Đang import…";
     for (const f of files) {
       try {
         let cand;
-        if (/\.zip$/i.test(f.name) || f.type === "application/zip") { const r = await zipToLevels(f); skipped += r.skipped; cand = r.levels; }
-        else { cand = levelCandidates(JSON.parse(await f.text())); }
+        if (/\.zip$/i.test(f.name) || f.type === "application/zip") { $("sg2SelInfo").textContent = `⏳ Giải nén ${f.name}…`; const r = await zipToLevels(f); skipped += r.skipped; cand = r.levels; }
+        else { $("sg2SelInfo").textContent = `⏳ Đọc & phân tích ${f.name}…`; await new Promise(r => requestAnimationFrame(r)); cand = levelCandidates(JSON.parse(await f.text())); }
         if (!cand) { bad++; continue; }
-        for (const o of cand) { const lv = coerceToSG2(o); if (lv) { LIB.push(lv); SEL.add(lv.id); added++; } else bad++; }
+        const r = await ingestChunked(cand, (a, N) => { $("sg2SelInfo").textContent = `⏳ Import ${a}/${N}…`; });
+        added += r.added; bad += r.bad;
       } catch (e) { bad++; console.error("[SG2 import]", f.name, e); }
     }
-    saveLib(); rebuildLib();
-    $("sg2SelInfo").textContent = `✓ Import ${added}` + (bad ? ` · lỗi ${bad}` : "") + (skipped ? ` · bỏ ${skipped}` : "");
+    let saveOk = true; try { localStorage.setItem(LS_KEY, JSON.stringify({ v: 1, lib: LIB, nextId })); } catch (e) { saveOk = false; }
+    $("sg2LibCount").textContent = LIB.length; updateSelInfo();
+    $("sg2SelInfo").textContent = `✓ Import ${added}` + (bad ? ` · lỗi ${bad}` : "") + (skipped ? ` · bỏ ${skipped}` : "")
+      + (saveOk ? "" : " · ⚠ KHÔNG lưu được (quá nhiều, vượt bộ nhớ trình duyệt — Export ra file để giữ)");
   }
 
   // ============================ TAB ============================
