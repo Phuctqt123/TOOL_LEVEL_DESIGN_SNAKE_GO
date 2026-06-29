@@ -1101,18 +1101,29 @@
   function dl(obj, name) { const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([JSON.stringify(obj, null, 2)], { type: "application/json" })); a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 2000); }
   // Convert 1 SG2 level → game format (Dx/Dy + Obstacles) để export round-trip với file gốc.
   // Type 1 = Wooden Box (Value = HP), Type 2 = Black Hole; Y-flip về hệ game (Y=0 ở trên).
+  const OB_NAME = { 1: "wooden box", 2: "black hole" };
   function sg2LvToGameFmt(lv) {
     const pieces = lv.snakes.map(s => ({
       dir: s.dir, cells: s.cells,
       fixedColor: (typeof s.fixedColor === "number" && s.fixedColor >= 1) ? s.fixedColor : -1,
       bends: (typeof countBends === "function") ? countBends(s.cells) : 0
     }));
-    const base = (typeof toGameLevel === "function")
-      ? toGameLevel(pieces, lv.W, lv.H, lv.score || 0, null)
-      : { Difficulty: lv.score || 0, XSize: lv.W, YSize: lv.H, Arrows: [], Colors: [] };
     const obstacles = [];
     (lv.items.wb || []).forEach(o => obstacles.push({ X: o.x, Y: lv.H - 1 - o.y, Value: o.n || 1, Type: 1 }));
     (lv.items.bh || []).forEach(o => obstacles.push({ X: o.x, Y: lv.H - 1 - o.y, Value: 0, Type: 2 }));
+    // Metadata cho level viewer biết loại obstacle (tên + đếm theo type)
+    const meta = obstacles.length ? {
+      obstacleCount: obstacles.length,
+      obstacles: obstacles.reduce((acc, o) => {
+        const key = OB_NAME[o.Type] || ("type" + o.Type);
+        const found = acc.find(x => x.id === o.Type);
+        if (found) found.count++; else acc.push({ id: o.Type, name: key, count: 1 });
+        return acc;
+      }, [])
+    } : null;
+    const base = (typeof toGameLevel === "function")
+      ? toGameLevel(pieces, lv.W, lv.H, lv.score || 0, meta)
+      : { Difficulty: lv.score || 0, XSize: lv.W, YSize: lv.H, Arrows: [], Colors: [] };
     if (obstacles.length) base.Obstacles = obstacles;
     if (lv.name) base._name = lv.name;
     if (lv.srcLid != null) base.LevelId = lv.srcLid;
