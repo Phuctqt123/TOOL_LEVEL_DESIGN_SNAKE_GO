@@ -244,8 +244,14 @@
     const skipped = ST.pool.length - within.length;
     ST.skipped = mode === "keep" ? skipped : 0;
     const sorted = usable.slice().sort((a, b) => a.area - b.area), poolOrig = usable;
-    // 🔒 keep mode: theo dõi số lần dùng từng layout -> phân bổ đều, tránh lặp quá nhiều
-    const keepUsage = new Array(poolOrig.length).fill(0);
+    // 🔒 keep mode: DECK xuyên suốt — layout dùng xong bị đẩy xuống cuối hàng, không bao giờ reset.
+    // Nhìn top K phía trước deck để chọn layout có area gần target nhất (difficulty matching),
+    // sau đó splice nó ra và push xuống cuối -> khoảng cách tối thiểu giữa 2 lần dùng = deck.length - K.
+    const keepDeck = (() => {
+      const d = poolOrig.slice();
+      for (let k = d.length - 1; k > 0; k--) { const j = Math.floor(Math.random() * (k + 1)); const t = d[k]; d[k] = d[j]; d[j] = t; }
+      return d;
+    })();
     let i = 0; const startT = now();
     const tick = () => {
       if (ST.cancel) { finishGen(); return; }
@@ -254,19 +260,17 @@
         const target = ST.targetArr[i];
         let r;
         if (mode === "keep") {
-          // Chọn layout ít dùng nhất (cân bằng số lần xuất hiện),
-          // trong nhóm đó ưu tiên diện tích hợp target -> layout lặp đều và hợp độ khó.
+          // Lấy layout từ TOP K của deck (K ≈ 20% deck size), ưu tiên area gần target.
+          // Layout được chọn (dù thành công hay fail) đều bị đẩy xuống CUỐI deck.
           const areaTarget = desiredArea(target);
-          let minCnt = keepUsage[0]; for (let j = 1; j < keepUsage.length; j++) if (keepUsage[j] < minCnt) minCnt = keepUsage[j];
-          const cands = poolOrig.map((L, j) => ({ L, j })).filter((_, j) => keepUsage[j] <= minCnt);
-          cands.sort((a, b) => Math.abs(a.L.area - areaTarget) - Math.abs(b.L.area - areaTarget));
-          const topK = Math.max(1, Math.min(8, Math.ceil(cands.length * 0.15)));
-          const chosen = cands[Math.floor(Math.random() * topK)];
-          keepUsage[chosen.j]++;
-          const L = chosen.L;
-          r = genOnLayout(L, target, adaptiveTries(L.area, tries), true); // keepShape: lấp gần kín -> giữ hình layout
+          const K = Math.max(1, Math.min(15, Math.ceil(keepDeck.length * 0.2)));
+          let bestIdx = 0, bestDist = Math.abs(keepDeck[0].area - areaTarget);
+          for (let k = 1; k < K; k++) { const d = Math.abs(keepDeck[k].area - areaTarget); if (d < bestDist) { bestDist = d; bestIdx = k; } }
+          const L = keepDeck.splice(bestIdx, 1)[0];
+          r = genOnLayout(L, target, adaptiveTries(L.area, tries), true);
+          keepDeck.push(L);   // chôn xuống cuối — cycle không reset suốt toàn bộ chuỗi
         } else {
-          r = genForTarget(sorted, target, tries);                         // genForTarget tự giảm số lần thử theo diện tích
+          r = genForTarget(sorted, target, tries);
         }
         ST.results.push(r ? { i: i + 1, ...r, target } : null);
         i++;
@@ -426,7 +430,7 @@
           </div>
           <div class="seq-prog"><i id="seqProgBar"></i></div>
           <div class="seq-info" id="seqGenInfo" style="margin-top:8px"></div>
-          <div class="hint" style="margin-top:6px">💡 <b>Theo độ khó</b>: mỗi level tự bốc layout có diện tích hợp target (board to ⇒ khó, nhỏ ⇒ dễ). · <b>🔒 Giữ layout gốc</b>: mượn hình của các layout đã nạp, <b>phân bổ đều</b> (mỗi layout xuất hiện tối đa ~⌈tổng÷pool⌉ lần, không lặp cứng đơn điệu), ưu tiên bốc layout có diện tích hợp target và <b>lấp gần kín khung "đã đục"</b> nên mỗi màn TRÔNG GIỐNG layout gốc. Vì giữ nguyên hình, độ khó chủ yếu do layout quyết định — <b>dải nắn hẹp hơn</b> (≈±15) và board to thiên về khó.</div>
+          <div class="hint" style="margin-top:6px">💡 <b>Theo độ khó</b>: mỗi level tự bốc layout có diện tích hợp target (board to ⇒ khó, nhỏ ⇒ dễ). · <b>🔒 Giữ layout gốc</b>: dùng <b>deck xoay vòng không reset</b> — layout dùng xong bị đẩy xuống cuối hàng (dù thành công hay thất bại), khoảng cách tối thiểu giữa 2 lần dùng ≈ 80% pool size. Mỗi lượt nhìn top ~20% deck để chọn layout có diện tích gần target nhất. Lấp gần kín khung "đã đục" → màn TRÔNG GIỐNG layout gốc.</div>
           <div class="seq-stats" id="seqStats"></div>
         </div>
       </div>`;
