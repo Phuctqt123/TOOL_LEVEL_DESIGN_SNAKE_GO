@@ -1101,7 +1101,7 @@
   function dl(obj, name) { const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([JSON.stringify(obj, null, 2)], { type: "application/json" })); a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 2000); }
   // Convert 1 SG2 level → game format (Dx/Dy + Obstacles) để export round-trip với file gốc.
   // Type 1 = Wooden Box (Value = HP), Type 2 = Black Hole; Y-flip về hệ game (Y=0 ở trên).
-  const OB_NAME = { 1: "linked snake", 2: "black hole" };
+  const OB_NAME = { 1: "wooden box", 2: "black hole" };
   function sg2LvToGameFmt(lv) {
     const pieces = lv.snakes.map(s => ({
       dir: s.dir, cells: s.cells,
@@ -1169,7 +1169,8 @@
     const items = emptyItems();
     if (Array.isArray(o.Obstacles)) o.Obstacles.forEach(ob => {
       const x = ob.X | 0, y = h - 1 - (ob.Y | 0);
-      if (ob.Type === 2) items.bh.push({ x, y });   // Type 2 = black hole; Type 1 = linked snake (không map vào item SG2)
+      if (ob.Type === 1) items.wb.push({ x, y, n: ob.Value > 0 ? ob.Value : 1 });
+      else if (ob.Type === 2) items.bh.push({ x, y });
     });
     const name = o._name || (o.LevelId != null ? "level_" + o.LevelId : null);   // giữ TÊN level gốc (vd "level_1")
     return { id: nextId++, W: w, H: h, snakes, items, score: 0, tier: TIERS[0][1], emoji: "", shapeName: "rect", ...(name ? { name } : {}), ...(o.LevelUId != null ? { srcUid: o.LevelUId } : {}), ...(o.LevelId != null ? { srcLid: o.LevelId } : {}) };   // KHÔNG tính độ khó (3404 level -> nặng)

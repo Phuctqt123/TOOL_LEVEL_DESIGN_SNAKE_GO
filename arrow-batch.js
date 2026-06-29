@@ -1558,7 +1558,7 @@ self.onmessage = function (e) {
   }
   // Level -> object FORMAT GAME (Y-FLIP, Indices...) thuần. + bản pack (kèm metadata để re-import).
   // tên loại obstacle theo Type (tạm — chỉnh lại khi có bảng Type chính thức của game)
-  const OBSTACLE_NAMES = { 1: "linked snake", 2: "black hole" };
+  const OBSTACLE_NAMES = { 1: "wooden box", 2: "black hole" };
   function layoutFromName(name) {   // "level_19_v1.json" -> "L19" (số ĐẦU TIÊN trong tên)
     const m = name && String(name).match(/\d+/);
     return m ? ("L" + parseInt(m[0], 10)) : null;
