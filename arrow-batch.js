@@ -1558,7 +1558,7 @@ self.onmessage = function (e) {
   }
   // Level -> object FORMAT GAME (Y-FLIP, Indices...) thuần. + bản pack (kèm metadata để re-import).
   // tên loại obstacle theo Type (tạm — chỉnh lại khi có bảng Type chính thức của game)
-  const OBSTACLE_NAMES = { 0: "wooden box", 1: "black hole", 2: "linked arrow", 3: "corner", 4: "pipe" };
+  const OBSTACLE_NAMES = { 1: "wooden box", 2: "black hole" };
   function layoutFromName(name) {   // "level_19_v1.json" -> "L19" (số ĐẦU TIÊN trong tên)
     const m = name && String(name).match(/\d+/);
     return m ? ("L" + parseInt(m[0], 10)) : null;
@@ -1577,10 +1577,18 @@ self.onmessage = function (e) {
       difficulty: lvl.score, snakeCount: lvl.pieces.length, colorCount: colors.size,
       XSize: lvl.w, YSize: lvl.h, turns: a.turns,
       percDyn: Math.round(sig.perc || 0), avgMoveRate: avg, minRate: mn, t1: a.t1Avail || 0,
-      obstacleCount: obs.length, obstacles: [...new Set(obs.map(o => OBSTACLE_NAMES[o.Type] || ("type" + o.Type)))],
+      obstacleCount: obs.length, obstacles: obs.reduce((acc, o) => {
+        const found = acc.find(x => x.id === o.Type);
+        if (found) found.count++; else acc.push({ id: o.Type, name: OBSTACLE_NAMES[o.Type] || ("type" + o.Type), count: 1 });
+        return acc;
+      }, []),
     };
   }
-  function gamePure(lvl, nameHint) { return toGameLevel(lvl.pieces, lvl.w, lvl.h, lvl.tier !== "KẸT" ? lvl.score : 0, metaOf(lvl, nameHint)); }
+  function gamePure(lvl, nameHint) {
+    const out = toGameLevel(lvl.pieces, lvl.w, lvl.h, lvl.tier !== "KẸT" ? lvl.score : 0, metaOf(lvl, nameHint));
+    if (lvl.gameObstacles && lvl.gameObstacles.length) out.Obstacles = lvl.gameObstacles;   // đưa Obstacles ra top-level để khớp chuẩn game
+    return out;
+  }
   function packLevelOf(lvl) {
     return Object.assign(gamePure(lvl, lvl.fileName), {
       score: lvl.score, tier: lvl.tier, target: lvl.target,
