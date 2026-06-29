@@ -1114,12 +1114,7 @@
     // Metadata cho level viewer biết loại obstacle (tên + đếm theo type)
     const meta = obstacles.length ? {
       obstacleCount: obstacles.length,
-      obstacles: obstacles.reduce((acc, o) => {
-        const key = OB_NAME[o.Type] || ("type" + o.Type);
-        const found = acc.find(x => x.id === o.Type);
-        if (found) found.count++; else acc.push({ id: o.Type, name: key, count: 1 });
-        return acc;
-      }, [])
+      obstacles: [...new Set(obstacles.map(o => OB_NAME[o.Type] || ("type" + o.Type)))]
     } : null;
     const base = (typeof toGameLevel === "function")
       ? toGameLevel(pieces, lv.W, lv.H, lv.score || 0, meta)

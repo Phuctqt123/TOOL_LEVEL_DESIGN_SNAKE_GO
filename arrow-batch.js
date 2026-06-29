@@ -1577,11 +1577,7 @@ self.onmessage = function (e) {
       difficulty: lvl.score, snakeCount: lvl.pieces.length, colorCount: colors.size,
       XSize: lvl.w, YSize: lvl.h, turns: a.turns,
       percDyn: Math.round(sig.perc || 0), avgMoveRate: avg, minRate: mn, t1: a.t1Avail || 0,
-      obstacleCount: obs.length, obstacles: obs.reduce((acc, o) => {
-        const found = acc.find(x => x.id === o.Type);
-        if (found) found.count++; else acc.push({ id: o.Type, name: OBSTACLE_NAMES[o.Type] || ("type" + o.Type), count: 1 });
-        return acc;
-      }, []),
+      obstacleCount: obs.length, obstacles: [...new Set(obs.map(o => OBSTACLE_NAMES[o.Type] || ("type" + o.Type)))],
     };
   }
   function gamePure(lvl, nameHint) {
