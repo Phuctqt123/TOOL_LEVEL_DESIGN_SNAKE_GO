@@ -1,0 +1,90 @@
+/* ===================== SO SÁNH 2 BỘ LEVEL ===================== */
+#compareView { grid-column: 1 / -1; }
+
+.cmp-wrap { display: flex; flex-direction: column; gap: 16px; }
+
+/* --- Hai khu nạp file (A | B) --- */
+.cmp-io { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+@media (max-width: 760px) { .cmp-io { grid-template-columns: 1fr; } }
+.cmp-side h2 { display: flex; align-items: center; gap: 8px; }
+.cmp-side h2 .cmp-tag { font-size: 10px; font-weight: 900; letter-spacing: .5px; color: #fff;
+  border-radius: 999px; padding: 2px 9px; }
+.cmp-side.a h2 .cmp-tag { background: linear-gradient(180deg, #5cb0ff, #2a86e6); }
+.cmp-side.b h2 .cmp-tag { background: linear-gradient(180deg, #4fd08a, #1ba85f); }
+.cmp-drop { border: 2px dashed var(--line2); border-radius: var(--radius-sm); padding: 18px 12px;
+  text-align: center; color: var(--muted); font-size: 13px; cursor: pointer; transition: border-color .15s, background .15s; }
+.cmp-drop:hover { border-color: var(--accent); }
+.cmp-drop.drag { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.cmp-drop b { color: var(--text); }
+.cmp-side .cmp-files { margin-top: 8px; font-size: 12px; color: var(--muted); min-height: 18px; }
+.cmp-side .cmp-files .cmp-cnt { color: var(--text); font-weight: 700; }
+
+/* --- Thanh điều khiển + tổng quan --- */
+.cmp-bar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.cmp-stats { display: flex; gap: 8px; flex-wrap: wrap; }
+.cmp-stat { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 700;
+  border: 1px solid var(--line); border-radius: 999px; padding: 4px 11px; background: var(--panel2); cursor: pointer;
+  transition: border-color .15s, box-shadow .15s; }
+.cmp-stat:hover { border-color: var(--line2); }
+.cmp-stat.active { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.cmp-stat .dot { width: 9px; height: 9px; border-radius: 50%; }
+.cmp-stat.changed .dot { background: #e8a13c; }
+.cmp-stat.added   .dot { background: #1ba85f; }
+.cmp-stat.removed .dot { background: #d8443f; }
+.cmp-stat.same    .dot { background: #7c8aa0; }
+.cmp-stat .n { color: var(--text); }
+
+/* --- Khu chính: danh sách trái · chi tiết phải --- */
+.cmp-main { display: grid; grid-template-columns: 320px minmax(0, 1fr); gap: 16px; align-items: start; }
+@media (max-width: 880px) { .cmp-main { grid-template-columns: 1fr; } }
+
+.cmp-list { display: flex; flex-direction: column; gap: 4px; max-height: calc(100vh - 320px);
+  min-height: 280px; overflow: auto; padding: 3px; }
+.cmp-list:empty::after { content: "Nạp 2 bộ level rồi bấm “So sánh”."; display: block; text-align: center;
+  color: var(--faint); font-size: 13px; padding: 36px 12px; }
+.cmp-row { display: flex; align-items: center; gap: 9px; padding: 8px 10px; border: 1px solid var(--line);
+  border-radius: var(--radius-sm); background: var(--panel2); cursor: pointer; font-size: 13px;
+  transition: border-color .12s, transform .1s; }
+.cmp-row:hover { border-color: var(--line2); transform: translateX(2px); }
+.cmp-row.sel { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.cmp-row .cmp-rname { flex: 1; min-width: 0; font-weight: 700; color: var(--text);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cmp-row .cmp-rsub { font-size: 11px; color: var(--muted); }
+.cmp-chip { font-size: 10px; font-weight: 900; letter-spacing: .3px; color: #fff; border-radius: 999px;
+  padding: 2px 8px; white-space: nowrap; }
+.cmp-chip.changed { background: linear-gradient(180deg, #f2b35a, #e0892b); }
+.cmp-chip.added   { background: linear-gradient(180deg, #4fd08a, #1ba85f); }
+.cmp-chip.removed { background: linear-gradient(180deg, #f0726c, #d8443f); }
+.cmp-chip.same    { background: linear-gradient(180deg, #9aa6b8, #7c8aa0); }
+
+/* --- Chi tiết --- */
+.cmp-detail { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.cmp-detail .cmp-empty { color: var(--faint); font-size: 13px; text-align: center; padding: 40px 12px; }
+.cmp-boards { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+@media (max-width: 620px) { .cmp-boards { grid-template-columns: 1fr; } }
+.cmp-board { display: flex; flex-direction: column; gap: 8px; }
+.cmp-board .cmp-bhd { display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 700; color: var(--muted); }
+.cmp-board .cmp-bhd .cmp-tag { font-size: 10px; font-weight: 900; color: #fff; border-radius: 999px; padding: 2px 8px; }
+.cmp-board.a .cmp-bhd .cmp-tag { background: linear-gradient(180deg, #5cb0ff, #2a86e6); }
+.cmp-board.b .cmp-bhd .cmp-tag { background: linear-gradient(180deg, #4fd08a, #1ba85f); }
+.cmp-canv-wrap { display: flex; justify-content: center; background: #0e1424; border: 1px solid var(--line2);
+  border-radius: var(--radius-sm); padding: 8px; }
+.cmp-canv-wrap canvas { max-width: 100%; image-rendering: auto; border-radius: 6px; }
+
+.cmp-legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 11.5px; color: var(--muted); }
+.cmp-legend span { display: inline-flex; align-items: center; gap: 5px; }
+.cmp-legend i { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+.cmp-legend i.add { background: rgba(34,200,120,.25); border: 2px solid #1ba85f; }
+.cmp-legend i.rem { background: rgba(220,70,60,.25); border: 2px solid #d8443f; }
+.cmp-legend i.chg { background: transparent; border: 2px dashed #e8a13c; }
+
+.cmp-changes { font-size: 13px; }
+.cmp-changes h3 { margin: 0 0 8px; font-size: 12px; text-transform: uppercase; letter-spacing: 1px; color: var(--muted); }
+.cmp-changes ul { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; }
+.cmp-changes li { color: var(--text); }
+.cmp-changes .ok { color: var(--muted); }
+.cmp-changes code { background: var(--panel2); border: 1px solid var(--line); border-radius: 5px;
+  padding: 1px 5px; font-size: 12px; }
+.cmp-changes .add-t { color: #1ba85f; font-weight: 700; }
+.cmp-changes .rem-t { color: #d8443f; font-weight: 700; }
+.cmp-changes .chg-t { color: #c77f1e; font-weight: 700; }

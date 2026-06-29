@@ -6,6 +6,8 @@
 <title>Snake Go</title>
 <link rel="stylesheet" href="arrow-out.css" />
 <link rel="stylesheet" href="snakego2.css" />
+<link rel="stylesheet" href="compare.css" />
+<link rel="stylesheet" href="sequence.css" />
 <script>
 /* Đặt theme SỚM (tránh nháy nền) + lưu lựa chọn. Mặc định: light (nền trắng). */
 (function () {
@@ -42,6 +44,8 @@
     <button type="button" class="tab" id="tabBatch">🎲 Sinh hàng loạt</button>
     <button type="button" class="tab" id="tabPlay">🎮 Chơi</button>
     <button type="button" class="tab" id="tabSG2">✨ Snake Go 2</button>
+    <button type="button" class="tab" id="tabCompare">🔍 So sánh</button>
+    <button type="button" class="tab" id="tabSeq">📈 1000 Levels</button>
   </nav>
 
   <div class="board-area">
@@ -273,10 +277,18 @@
 
   <!-- ============ SNAKE GO 2 (sáng tạo + vật phẩm) — file tách riêng ============ -->
   <div id="sg2View" style="display:none"></div>
+
+  <!-- ============ SO SÁNH 2 BỘ LEVEL — file tách riêng ============ -->
+  <div id="compareView" style="display:none"></div>
+
+  <!-- ============ CHUỖI 1000 LEVEL THEO ĐƯỜNG CONG — file tách riêng ============ -->
+  <div id="seqView" style="display:none"></div>
 </div>
 
 <script src="arrow-out.js"></script>
 <script src="arrow-batch.js"></script>
 <script src="snakego2.js"></script>
+<script src="compare.js"></script>
+<script src="sequence.js"></script>
 </body>
 </html>

@@ -1099,7 +1099,27 @@
     if (dirty) saveLib(); rebuildLib();
   }
   function dl(obj, name) { const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([JSON.stringify(obj, null, 2)], { type: "application/json" })); a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 2000); }
-  function exportSel() { const sel = LIB.filter(l => SEL.has(l.id)), list = sel.length ? sel : LIB; if (!list.length) { $("sg2SelInfo").textContent = "Chưa có level."; return; } dl({ v: 1, game: "snakego2", levels: list }, `snakego2-${list.length}.json`); }
+  // Convert 1 SG2 level → game format (Dx/Dy + Obstacles) để export round-trip với file gốc.
+  // Type 1 = Wooden Box (Value = HP), Type 2 = Black Hole; Y-flip về hệ game (Y=0 ở trên).
+  function sg2LvToGameFmt(lv) {
+    const pieces = lv.snakes.map(s => ({
+      dir: s.dir, cells: s.cells,
+      fixedColor: (typeof s.fixedColor === "number" && s.fixedColor >= 1) ? s.fixedColor : -1,
+      bends: (typeof countBends === "function") ? countBends(s.cells) : 0
+    }));
+    const base = (typeof toGameLevel === "function")
+      ? toGameLevel(pieces, lv.W, lv.H, lv.score || 0, null)
+      : { Difficulty: lv.score || 0, XSize: lv.W, YSize: lv.H, Arrows: [], Colors: [] };
+    const obstacles = [];
+    (lv.items.wb || []).forEach(o => obstacles.push({ X: o.x, Y: lv.H - 1 - o.y, Value: o.n || 1, Type: 1 }));
+    (lv.items.bh || []).forEach(o => obstacles.push({ X: o.x, Y: lv.H - 1 - o.y, Value: 0, Type: 2 }));
+    if (obstacles.length) base.Obstacles = obstacles;
+    if (lv.name) base._name = lv.name;
+    if (lv.srcLid != null) base.LevelId = lv.srcLid;
+    if (lv.srcUid != null) base.LevelUId = lv.srcUid;
+    return base;
+  }
+  function exportSel() { const sel = LIB.filter(l => SEL.has(l.id)), list = sel.length ? sel : LIB; if (!list.length) { $("sg2SelInfo").textContent = "Chưa có level."; return; } dl(list.map(sg2LvToGameFmt), `sg2-game-${list.length}.json`); }
   // ---------- IMPORT đa định dạng (như Snake Go 1): game-format / {w,h,pieces} / SG2 native / pack / mảng / .zip ----------
   const _xy = c => Array.isArray(c) ? { x: c[0], y: c[1] } : { x: c.x, y: c.y };
   function pieceToSnake(p, i) { const s = { id: i + 1, dir: p.dir, cells: p.cells.map(_xy), link: null }; if (p.mother) s.mother = true; if (typeof p.fixedColor === "number" && p.fixedColor >= 1) s.fixedColor = p.fixedColor; return s; }
@@ -1134,8 +1154,15 @@
       const s = { id: i + 1, dir, cells, link: null }, ci = aoColorIndex(a.ColorType); if (ci) s.fixedColor = ci; snakes.push(s);
     });
     if (!snakes.length) return null;
+    // Parse Obstacles: Type 1 = Wooden Box, Type 2 = Black Hole; Y-flip về hệ toạ độ nội bộ
+    const items = emptyItems();
+    if (Array.isArray(o.Obstacles)) o.Obstacles.forEach(ob => {
+      const x = ob.X | 0, y = h - 1 - (ob.Y | 0);
+      if (ob.Type === 1) items.wb.push({ x, y, n: ob.Value > 0 ? ob.Value : 1 });
+      else if (ob.Type === 2) items.bh.push({ x, y });
+    });
     const name = o._name || (o.LevelId != null ? "level_" + o.LevelId : null);   // giữ TÊN level gốc (vd "level_1")
-    return { id: nextId++, W: w, H: h, snakes, items: emptyItems(), score: 0, tier: TIERS[0][1], emoji: "", shapeName: "rect", ...(name ? { name } : {}), ...(o.LevelUId != null ? { srcUid: o.LevelUId } : {}) };   // KHÔNG tính độ khó (3404 level -> nặng)
+    return { id: nextId++, W: w, H: h, snakes, items, score: 0, tier: TIERS[0][1], emoji: "", shapeName: "rect", ...(name ? { name } : {}), ...(o.LevelUId != null ? { srcUid: o.LevelUId } : {}), ...(o.LevelId != null ? { srcLid: o.LevelId } : {}) };   // KHÔNG tính độ khó (3404 level -> nặng)
   }
   // 1 object thô (bất kỳ định dạng) -> 1 level SG2, hoặc null nếu không nhận diện được.
   function coerceToSG2(o) {
@@ -1151,7 +1178,18 @@
     }
     if (typeof isGameFormat === "function" && isGameFormat(o) && typeof fromGameLevel === "function") {   // FORMAT GAME (XSize/Arrows, Y-flip)
       const g = fromGameLevel(o); if (!g || !g.w || !g.h || !g.pieces.length) return null;
-      return finalizeImported(g.pieces.map(pieceToSnake), emptyItems(), g.w, g.h, null);
+      const items = emptyItems();
+      (g.obstacles || []).forEach(ob => {
+        const x = ob.X | 0, y = g.h - 1 - (ob.Y | 0);
+        if (ob.Type === 1) items.wb.push({ x, y, n: ob.Value > 0 ? ob.Value : 1 });
+        else if (ob.Type === 2) items.bh.push({ x, y });
+      });
+      const lv = finalizeImported(g.pieces.map(pieceToSnake), items, g.w, g.h, null);
+      const name = o._name || (o.LevelId != null ? "level_" + o.LevelId : null);
+      if (name) lv.name = name;
+      if (o.LevelUId != null) lv.srcUid = o.LevelUId;
+      if (o.LevelId != null) lv.srcLid = o.LevelId;
+      return lv;
     }
     if (Array.isArray(o.pieces)) {   // SG1 cũ {w,h,pieces}
       const W = o.w || (o.grid && o.grid[0] ? o.grid[0].length : 0), H = o.h || (o.grid ? o.grid.length : 0);

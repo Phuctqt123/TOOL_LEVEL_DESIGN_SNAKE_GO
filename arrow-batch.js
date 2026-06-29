@@ -1890,10 +1890,9 @@ self.onmessage = function (e) {
   // Thả ảnh ở BẤT KỲ đâu khi đang ở chế độ Hàng loạt hoặc Editor — có lớp phủ chỉ dẫn.
   const dropOverlay = document.createElement("div");
   dropOverlay.id = "dropOverlay";
-  dropOverlay.textContent = "🖼️ Thả ảnh để nạp  ·  🗜️ Thả .zip để import level";
+  dropOverlay.textContent = "🖼️ Thả ảnh để nạp  ·  🗜️ Thả .json / .zip để import level";
   document.body.appendChild(dropOverlay);
   const dndHasImage = e => e.dataTransfer && [...e.dataTransfer.types].some(t => t === "Files" || t === "text/uri-list" || t === "text/html");
-  const zipFromDataTransfer = dt => dt.files && [...dt.files].find(f => /\.zip$/i.test(f.name) || f.type === "application/zip");
   const dndMode = () => state.mode === "batch" || state.mode === "edit";
   let dragDepth = 0;
   const hideOverlay = () => { dragDepth = 0; dropOverlay.classList.remove("show"); };
@@ -1905,9 +1904,9 @@ self.onmessage = function (e) {
     if (!dndHasImage(e)) return;
     e.preventDefault(); hideOverlay();
     if (state.mode === "batch") {
-      const zf = zipFromDataTransfer(e.dataTransfer);
-      if (zf) { importZip(zf); return; }                               // thả .zip -> import level
-      if (!imageFromDataTransfer(e.dataTransfer, setBatchImage)) $b("bLayoutInfo").textContent = "⚠ Không thấy ảnh trong nội dung kéo vào.";
+      const dataFiles = e.dataTransfer.files ? [...e.dataTransfer.files].filter(f => /\.(json|zip)$/i.test(f.name) || f.type === "application/json" || f.type === "application/zip") : [];
+      if (dataFiles.length) { importFiles(dataFiles); return; }         // thả .json / .zip (nhiều file) -> import level
+      if (!imageFromDataTransfer(e.dataTransfer, setBatchImage)) $b("bLayoutInfo").textContent = "⚠ Không thấy ảnh / level (.json/.zip) trong nội dung kéo vào.";
     } else if (state.mode === "edit") {
       const ok = imageFromDataTransfer(e.dataTransfer, (img, fromWeb) => {
         let tainted = false;
