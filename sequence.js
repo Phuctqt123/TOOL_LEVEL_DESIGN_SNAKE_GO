@@ -260,6 +260,31 @@
       if (x >= 0 && x < W && y >= 0 && y < H && cm && cm[y] && cm[y][x]) p.fixedColor = cm[y][x];
     }
   }
+  let seqWorkerURL = null;
+  function buildCloneWorkerURL() {
+    if (seqWorkerURL) return seqWorkerURL;
+    const fns = [clamp, inBoard, solve, depMetrics, movableList, analyzeSolve, percRisk, percDynamic, regionSeparation, intraDifficulty, computeDifficulty, rint, shuffle, growSnake, snakeLen, generateMap];
+    let src = '"use strict";\n';
+    src += 'const DIRS=' + JSON.stringify(DIRS) + ';\n';
+    src += 'const DELTA=' + JSON.stringify(DELTA) + ';\n';
+    src += 'const MAXSNAKES=' + MAXSNAKES + ';\n';
+    src += 'const DIFF_TIERS=' + JSON.stringify(DIFF_TIERS) + ';\n';
+    for (const fn of fns) src += fn.toString() + '\n';
+    src += `function genCloneCandidate(W,H,maskArr,target,tries,tolerance){ const mask = maskArr && maskArr.length ? new Set(maskArr) : null; let best = null, bestErr = 1e9; const baseFill = 0.92 + Math.random() * 0.04; for (let k = 0; k < tries; k++) { let fill = clamp(baseFill + (Math.random() * 2 - 1) * 0.02, 0.90, 0.98); const longPref = clamp(85 - (target / 100) * 70 + (Math.random() * 8 - 4), 0, 95); const dparam = clamp(target + (Math.random() * 2 - 1) * 10, 0, 100); let pieces; try { pieces = generateMap(W, H, longPref, dparam, 0, { mask, fill }); } catch (e) { continue; } if (!pieces || pieces.length < 2) continue; const d = computeDifficulty(pieces, W, H); if (d.tier === 'KẸT' || !d.score) continue; const err = Math.abs(d.score - target); if (err < bestErr) { bestErr = err; best = { W, H, mask: maskArr || [], pieces, score: d.score, tier: d.tier, srcName: '' }; if (err <= tolerance) break; } } return best; } self.onmessage = function (e) { const m = e.data; const res = genCloneCandidate(m.W, m.H, m.maskArr || [], m.target, m.tries || 2, m.tolerance || 5); self.postMessage(res); };`;
+    seqWorkerURL = URL.createObjectURL(new Blob([src], { type: 'application/javascript' }));
+    return seqWorkerURL;
+  }
+  async function runCloneGeneration(layout, target, tries, tolerance) {
+    if (typeof Worker === 'undefined') return null;
+    const url = buildCloneWorkerURL();
+    return new Promise((resolve) => {
+      const worker = new Worker(url);
+      const timer = setTimeout(() => { try { worker.terminate(); } catch (e) {} resolve(null); }, 12000);
+      worker.onmessage = (ev) => { clearTimeout(timer); try { worker.terminate(); } catch (e) {} resolve(ev.data || null); };
+      worker.onerror = () => { clearTimeout(timer); try { worker.terminate(); } catch (e) {} resolve(null); };
+      worker.postMessage({ W: layout.W, H: layout.H, maskArr: Array.from(layout.mask || []), target, tries: Math.max(1, Math.min(3, Math.ceil(tries / 8))), tolerance });
+    });
+  }
 
   async function runGenerate() {
     if (ST.busy) return;
@@ -283,9 +308,10 @@
     const sorted = usable.slice().sort((a, b) => a.area - b.area), poolOrig = usable;
     const startT = now();
     let done = 0;
-    const cpuCores = typeof navigator !== "undefined" && navigator.hardwareConcurrency ? navigator.hardwareConcurrency : 4;
-    const concurrency = Math.max(1, Math.min(2, Math.floor(cpuCores / 4)));
-    const threadLabel = `${concurrency} luồng · 3 level/đợt`;
+    const cpuCores = typeof navigator !== "undefined" && navigator.hardwareConcurrency ? navigator.hardwareConcurrency : 8;
+    const concurrency = Math.max(4, Math.min(12, cpuCores));
+    const chunkSize = Math.max(6, Math.min(12, Math.ceil(cpuCores / 1.5)));
+    const threadLabel = `${concurrency} luồng · ${chunkSize} level/đợt`;
 
     const updateProgress = (N, ok, current) => {
       const el = (now() - startT) / 1000, rate = current / Math.max(0.001, el);
@@ -310,26 +336,32 @@
         if (!cloneSources.length) { $("seqGenInfo").textContent = "⚠ Không có level nguồn hợp lệ trong khoảng clone."; finishGen(); return; }
         const N = cloneSources.length;
         ST.results = new Array(N).fill(null);
-        for (let i = 0; i < cloneSources.length; i++) {
-          if (ST.cancel) break;
-          const { raw, layout, target } = cloneSources[i];
-          const r = genOnLayout(layout, target, adaptiveTries(layout.area, tries), true, tol);
-          if (r) {
-            const colorSpec = buildCloneColorMap(raw);
-            applyCloneColorsToPieces(r.pieces, colorSpec);
-            ST.results[i] = { i: i + 1, ...r, target, srcName: layout.name || raw._name || `clone_${i + 1}` };
+        let nextClone = 0;
+        const clonePool = Array.from({ length: Math.min(concurrency, Math.max(4, N)) }, async () => {
+          while (!ST.cancel && nextClone < N) {
+            const i = nextClone++;
+            const { raw, layout, target } = cloneSources[i];
+            const cloneTryCount = Math.max(1, Math.min(3, Math.ceil(tries / 8)));
+            const workerResult = await runCloneGeneration(layout, target, cloneTryCount, tol);
+            const r = workerResult || genOnLayout(layout, target, adaptiveTries(layout.area, cloneTryCount), true, tol);
+            if (r) {
+              const colorSpec = buildCloneColorMap(raw);
+              applyCloneColorsToPieces(r.pieces, colorSpec);
+              ST.results[i] = { i: i + 1, ...r, target, srcName: layout.name || raw._name || `clone_${i + 1}` };
+            }
+            done++;
+            const ok = ST.results.filter(Boolean).length;
+            updateProgress(N, ok, done);
+            await new Promise(resolve => requestAnimationFrame(() => resolve()));
           }
-          done++;
-          const ok = ST.results.filter(Boolean).length;
-          updateProgress(N, ok, done);
-          if (i < cloneSources.length - 1) await new Promise(resolve => requestAnimationFrame(() => resolve()));
-        }
+        });
+        await Promise.all(clonePool);
         finishGen();
         return;
       }
       const N = ST.total;
       const targetChunks = [];
-      for (let start = 0; start < N; start += 3) targetChunks.push(ST.targetArr.slice(start, start + 3));
+      for (let start = 0; start < N; start += chunkSize) targetChunks.push(ST.targetArr.slice(start, start + chunkSize));
       ST.results = new Array(N).fill(null);
       const generateChunk = async (chunkTargets, startIndex) => {
         const localDeck = mode === "keep" ? poolOrig.slice() : null;
@@ -360,7 +392,7 @@
       const workers = Array.from({ length: Math.min(concurrency, targetChunks.length) }, async () => {
         while (!ST.cancel && nextChunk < targetChunks.length) {
           const idx = nextChunk++;
-          await generateChunk(targetChunks[idx], idx * 3);
+          await generateChunk(targetChunks[idx], idx * chunkSize);
           await new Promise(resolve => requestAnimationFrame(() => resolve()));
         }
       });
