@@ -21,13 +21,15 @@ function enforceHeadDir(piece) {
   if (piece.cells.length >= 2) piece.dir = dirFromTo(piece.cells[1], piece.cells[0]);
   return piece;
 }
-const PALETTE = ["#4f9fff","#46c08a","#e0b84f","#e0586a","#b06ae0","#4fd0e0","#e08a4f","#88c850","#e04fa0","#7a86e0","#c0a44f","#4fc0a0"];
+const PALETTE = ["#4285F4","#2874F1","#C72E35","#FFC315","#48B06A","#9869FF","#E365B0","#EF8314","#FB8074","#0FB2B8","#35D8FF","#9EE338","#8D6E3F","#5A6B7A","#694714","#959595","#B0ADAD"];
 function pieceColor(id) { return PALETTE[id % PALETTE.length]; }
 
 // ---------- Format game Snake Escape (chuẩn) <-> nội bộ ----------
 // Bảng 48 màu game chính thức (ColorType 1..48), index 1-based -> GAME_COLORS[idx-1].
 const GAME_COLORS = ['#4285F4','#2874F1','#6DA1F7','#C83F45','#C72E35','#E3595F','#FFC315','#E4A802','#FECF47','#48B06A','#31A256','#5DC57F','#9869FF','#8C5CF3','#A57DFD','#E365B0','#E752AB','#E87ABC','#EF8314','#E97600','#FB9D3C','#FF6F61','#FD5E4E','#FB8074','#0FB2B8','#00A6AC','#50CFD4','#35D8FF','#10C5EF','#65E2FF','#9EE338','#88D910','#AEE956','#8D6E3F','#8F6526','#A0865F','#5A6B7A','#4E6273','#69757F','#694714','#62400C','#775725','#2C5FCC','#1C56D1','#3D6ACB','#959595','#807E7E','#B0ADAD'];
 function gameColor(idx) { return (idx >= 1 && idx <= GAME_COLORS.length) ? GAME_COLORS[idx - 1] : null; }
+const AO_COLOR_INDEX = { Blue: 1, DarkBlue: 2, Aqua: 28, SeaGreen: 25, Green: 10, ParrotGreen: 31, Yellow: 7, Orange: 19, Peach: 24, Red: 5, Pink: 16, Purple: 13, LightBrown: 34, DarkBrown: 40, Gray: 46, BlueishGray: 37, OffWhite: 48 };
+function gameColorIndex(name) { if (!name) return 0; if (AO_COLOR_INDEX[name]) return AO_COLOR_INDEX[name]; const s = String(name); let h = 0; for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0; return (h % GAME_COLORS.length) + 1; }
 let colorMode = "rainbow";   // 'rainbow' (mỗi rắn 1 màu, dễ design) | 'game' (theo fixedColor 48 màu)
 function dirFromDelta(dx, dy) { if (dx === 1) return "right"; if (dx === -1) return "left"; if (dy === 1) return "down"; return "up"; }
 function countBends(cells) {
@@ -71,7 +73,7 @@ function fromGameLevel(data) {
     let dir;
     if (cells.length >= 2) dir = dirFromTo(cells[1], cells[0]);
     else dir = dirFromDelta(arrow.Dx || 0, -(arrow.Dy || 0));   // 1 ô: dùng Dx/Dy (đảo Dy)
-    const fc = (typeof arrow.fixedColor === "number" && arrow.fixedColor >= 1) ? arrow.fixedColor : -1;   // 0/khuyết = không màu
+    const fc = (typeof arrow.fixedColor === "number" && arrow.fixedColor >= 1) ? arrow.fixedColor : (arrow.ColorType ? gameColorIndex(arrow.ColorType) : -1);   // 0/khuyết = không màu
     pieces.push({ dir, cells, fixedColor: fc, bends: (typeof arrow.BendCount === "number") ? arrow.BendCount : countBends(cells) });
   }
   return { w, h, pieces, obstacles: Array.isArray(data.Obstacles) ? data.Obstacles : [] };

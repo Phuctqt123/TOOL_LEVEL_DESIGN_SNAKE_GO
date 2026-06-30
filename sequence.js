@@ -188,19 +188,25 @@
     return area <= 120 ? base : area <= 250 ? Math.max(3, Math.round(base * 0.5)) : Math.max(2, Math.round(base * 0.3));
   }
   // Dò trên 1 layout CỐ ĐỊNH — chọn bản gần target nhất.
-  // keepShape=true (chế độ 🔒 Giữ layout gốc): LẤP GẦN KÍN mask (~90%+) để giữ ĐÚNG hình "đã đục"
-  //   của layout gốc; độ khó nắn bằng cấu trúc rắn (longPref/difficulty) — dải hẹp hơn, đổi lại đúng hình.
-  // keepShape=false (chế độ theo độ khó): fill ≤0.78 để vươn xuống vùng dễ + chạy nhanh.
-  function genOnLayout(L, target, tries, keepShape) {
+  // keepShape=true (chế độ 🔒 Giữ layout gốc): fill luôn >= 90% giữ đúng khung layout;
+  //   sweep longPref/dparam theo target để bám đường cong; strict — chỉ trả nếu sai số <= tolerance.
+  // keepShape=false (chế độ theo độ khó): fill biến thiên để vươn xuống vùng dễ + chạy nhanh.
+  function genOnLayout(L, target, tries, keepShape, tolerance) {
     if (typeof generateMap !== "function" || typeof computeDifficulty !== "function" || !L) return null;
+    const okErr = Math.max(0, Number.isFinite(tolerance) ? tolerance : 5);
     const baseFill = clamp(0.15 + target / 100 * 0.55, 0.15, 0.72);
     let best = null, bestErr = 1e9;
     for (let k = 0; k < tries; k++) {
       let fill, longPref, dparam;
       if (keepShape) {
-        fill = clamp(0.95 + (Math.random() * 2 - 1) * 0.05, 0.88, 1);    // lấp gần kín -> phủ đúng khung layout
-        longPref = clamp(25 + Math.random() * 65, 0, 95);                 // đa dạng cấu trúc -> mở rộng dải độ khó
-        dparam = clamp(target + (Math.random() * 2 - 1) * 32, 0, 100);
+        // fill luôn >= 90% — giữ đúng khung hình layout gốc
+        fill = clamp(0.92 + (Math.random() * 2 - 1) * 0.04, 0.90, 0.98);
+        // Sweep longPref: target thấp → rắn dài (ít rắn, dễ); target cao → rắn ngắn (nhiều rắn, khó)
+        const sweep = tries > 1 ? (k / (tries - 1)) - 0.5 : 0;
+        const longFactor = clamp((target / 100) - sweep * 0.3, 0, 1);
+        longPref = clamp(85 - longFactor * 75 + (Math.random() * 10 - 5), 0, 95);
+        // dparam: sweep quanh target với biên độ vừa phải
+        dparam = clamp(target + sweep * 20 + (Math.random() * 6 - 3), 0, 100);
       } else {
         fill = clamp(baseFill + (Math.random() * 2 - 1) * 0.2, 0.1, 0.78);
         longPref = clamp(40 + target * 0.35, 0, 95);
@@ -210,8 +216,10 @@
       if (!pieces || pieces.length < 2) continue;
       const d = computeDifficulty(pieces, L.W, L.H); if (d.tier === "KẸT" || !d.score) continue;
       const err = Math.abs(d.score - target);
-      if (err < bestErr) { bestErr = err; best = { W: L.W, H: L.H, mask: L.mask, pieces, score: d.score, tier: d.tier, srcName: L.name }; if (err <= 5) break; }   // "đủ tốt" -> dừng sớm cho nhanh
+      if (err < bestErr) { bestErr = err; best = { W: L.W, H: L.H, mask: L.mask, pieces, score: d.score, tier: d.tier, srcName: L.name }; if (err <= okErr) break; }
     }
+    // keepShape strict: chỉ xuất nếu sai số <= tolerance; chế độ diff vẫn trả best bất kể
+    if (keepShape) return (best && bestErr <= okErr) ? best : null;
     return best;
   }
   function genForTarget(sorted, target, tries) {
@@ -227,69 +235,149 @@
     }
     return best;
   }
+  function buildCloneColorMap(raw) {
+    if (typeof fromGameLevel !== "function") return null;
+    try {
+      const g = fromGameLevel(raw); if (!g || !g.pieces || !g.pieces.length) return null;
+      const W = g.w, H = g.h; const cm = Array.from({ length: H }, () => Array(W).fill(0));
+      g.pieces.forEach((p, idx) => {
+        const color = (typeof p.fixedColor === "number" && p.fixedColor >= 1) ? p.fixedColor : (idx + 1);
+        for (const c of p.cells) {
+          const x = c && (c.x != null ? c.x : c[0]), y = c && (c.y != null ? c.y : c[1]);
+          if (x >= 0 && x < W && y >= 0 && y < H) cm[y][x] = color;
+        }
+      });
+      return { W, H, cm };
+    } catch (e) { return null; }
+  }
+  function applyCloneColorsToPieces(pieces, colorSpec) {
+    if (!colorSpec || !pieces || !pieces.length) return;
+    const { cm, W, H } = colorSpec;
+    for (const p of pieces) {
+      if (p.mother) continue;
+      const head = p.cells && p.cells[0]; if (!head) continue;
+      const x = head.x != null ? head.x : head[0], y = head.y != null ? head.y : head[1];
+      if (x >= 0 && x < W && y >= 0 && y < H && cm && cm[y] && cm[y][x]) p.fixedColor = cm[y][x];
+    }
+  }
 
-  function runGenerate() {
+  async function runGenerate() {
     if (ST.busy) return;
     if (!ST.pool.length) { $("seqGenInfo").textContent = "⚠ Chưa có layout — nạp dữ liệu Arrow Out trước."; return; }
     if (!ST.targetArr) { $("seqGenInfo").textContent = "⚠ Chưa có đường cong — bấm “Auto-fit từ baseline”."; return; }
-    ST.busy = true; ST.cancel = false; ST.results = [];
+    ST.busy = true; ST.cancel = false; ST.results = []; ST.tol = 5;
     $("seqGenBtn").disabled = true; $("seqCancelBtn").style.display = "inline-flex";
-    const N = ST.total, tries = clamp(parseInt($("seqTries").value) || 10, 2, 40);
+    const tries = clamp(parseInt($("seqTries").value) || 10, 2, 40);
+    const tol = clamp(parseFloat($("seqCloneTol") ? $("seqCloneTol").value : "5") || 5, 0, 100);
+    ST.tol = tol;
     const mode = $("seqLayoutMode") ? $("seqLayoutMode").value : "diff";   // "diff" = chọn theo độ khó · "keep" = 🔒 giữ layout gốc, lặp lại
-    // GIỚI HẠN DIỆN TÍCH: generateMap tăng siêu tuyến tính theo area (area 400≈0.2s · 700≈1s · 1100≈7s).
-    // Loại board quá to -> nhanh hơn HÀNG CHỤC lần; board ~400 vẫn đạt độ khó ~85 (1000 lv ~3 phút).
+    const cloneFrom = clamp(parseInt($("seqCloneFrom").value) || 1, 1, Math.max(1, ST.raw.length));
+    const cloneTo = clamp(parseInt($("seqCloneTo").value) || cloneFrom, cloneFrom, Math.max(cloneFrom, ST.raw.length));
+    const cloneDelta = clamp(parseInt($("seqCloneDelta").value) || 0, 0, 50);
+    const useCloneRange = !!ST.raw.length && cloneFrom <= cloneTo && cloneFrom <= ST.raw.length;
     const maxArea = clamp(parseInt($("seqMaxArea").value) || 400, 100, 4000);
     const within = ST.pool.filter(L => L.area <= maxArea);
-    const usable = within.length ? within : ST.pool.slice().sort((a, b) => a.area - b.area).slice(0, 1);   // không có board nào ≤ cap -> dùng nhỏ nhất
+    const usable = within.length ? within : ST.pool.slice().sort((a, b) => a.area - b.area).slice(0, 1);
     const skipped = ST.pool.length - within.length;
     ST.skipped = mode === "keep" ? skipped : 0;
     const sorted = usable.slice().sort((a, b) => a.area - b.area), poolOrig = usable;
-    // 🔒 keep mode: DECK xuyên suốt — layout dùng xong bị đẩy xuống cuối hàng, không bao giờ reset.
-    // Nhìn top K phía trước deck để chọn layout có area gần target nhất (difficulty matching),
-    // sau đó splice nó ra và push xuống cuối -> khoảng cách tối thiểu giữa 2 lần dùng = deck.length - K.
-    const keepDeck = (() => {
-      const d = poolOrig.slice();
-      for (let k = d.length - 1; k > 0; k--) { const j = Math.floor(Math.random() * (k + 1)); const t = d[k]; d[k] = d[j]; d[j] = t; }
-      return d;
-    })();
-    let i = 0; const startT = now();
-    const tick = () => {
-      if (ST.cancel) { finishGen(); return; }
-      const t0 = now();
-      while (i < N && now() - t0 < 28) {
-        const target = ST.targetArr[i];
-        let r;
-        if (mode === "keep") {
-          // Lấy layout từ TOP K của deck (K ≈ 20% deck size), ưu tiên area gần target.
-          // Layout được chọn (dù thành công hay fail) đều bị đẩy xuống CUỐI deck.
-          const areaTarget = desiredArea(target);
-          const K = Math.max(1, Math.min(15, Math.ceil(keepDeck.length * 0.2)));
-          let bestIdx = 0, bestDist = Math.abs(keepDeck[0].area - areaTarget);
-          for (let k = 1; k < K; k++) { const d = Math.abs(keepDeck[k].area - areaTarget); if (d < bestDist) { bestDist = d; bestIdx = k; } }
-          const L = keepDeck.splice(bestIdx, 1)[0];
-          r = genOnLayout(L, target, adaptiveTries(L.area, tries), true);
-          keepDeck.push(L);   // chôn xuống cuối — cycle không reset suốt toàn bộ chuỗi
-        } else {
-          r = genForTarget(sorted, target, tries);
-        }
-        ST.results.push(r ? { i: i + 1, ...r, target } : null);
-        i++;
-      }
-      const ok = ST.results.filter(Boolean).length, el = (now() - startT) / 1000, rate = i / Math.max(0.001, el);
-      const eta = rate > 0 ? Math.round((N - i) / rate) : 0;
-      $("seqProgBar").style.width = Math.round(i / N * 100) + "%";
-      $("seqGenInfo").textContent = `Đang sinh ${i}/${N} · đạt ${ok} · ${rate.toFixed(1)} lv/s · còn ~${eta}s`;
-      if (i % Math.max(1, Math.floor(N / 50)) < 2) drawCurve();
-      if (i < N) requestAnimationFrame(tick); else finishGen();
+    const startT = now();
+    let done = 0;
+    const cpuCores = typeof navigator !== "undefined" && navigator.hardwareConcurrency ? navigator.hardwareConcurrency : 4;
+    const concurrency = Math.max(1, Math.min(2, Math.floor(cpuCores / 4)));
+    const threadLabel = `${concurrency} luồng · 3 level/đợt`;
+
+    const updateProgress = (N, ok, current) => {
+      const el = (now() - startT) / 1000, rate = current / Math.max(0.001, el);
+      const eta = rate > 0 ? Math.round((N - current) / rate) : 0;
+      $("seqProgBar").style.width = Math.round(current / N * 100) + "%";
+      $("seqGenInfo").textContent = `Đang sinh ${current}/${N} · đạt ${ok} · ${rate.toFixed(1)} lv/s · còn ~${eta}s · ${threadLabel}`;
+      if (current % Math.max(1, Math.floor(N / 50)) < 2) drawCurve();
     };
-    requestAnimationFrame(tick);
+
+    try {
+      if (useCloneRange) {
+        const srcLevels = ST.raw.slice(cloneFrom - 1, cloneTo);
+        const cloneSources = [];
+        for (const raw of srcLevels) {
+          const layout = maskFromLevel(raw); if (!layout) continue;
+          const measured = measureBaseline(raw);
+          const base = measured != null ? measured : 50;
+          const offset = (Math.random() * 2 - 1) * cloneDelta;
+          const target = clamp(Math.round(base + offset), 0, 100);
+          cloneSources.push({ raw, layout, target });
+        }
+        if (!cloneSources.length) { $("seqGenInfo").textContent = "⚠ Không có level nguồn hợp lệ trong khoảng clone."; finishGen(); return; }
+        const N = cloneSources.length;
+        ST.results = new Array(N).fill(null);
+        for (let i = 0; i < cloneSources.length; i++) {
+          if (ST.cancel) break;
+          const { raw, layout, target } = cloneSources[i];
+          const r = genOnLayout(layout, target, adaptiveTries(layout.area, tries), true, tol);
+          if (r) {
+            const colorSpec = buildCloneColorMap(raw);
+            applyCloneColorsToPieces(r.pieces, colorSpec);
+            ST.results[i] = { i: i + 1, ...r, target, srcName: layout.name || raw._name || `clone_${i + 1}` };
+          }
+          done++;
+          const ok = ST.results.filter(Boolean).length;
+          updateProgress(N, ok, done);
+          if (i < cloneSources.length - 1) await new Promise(resolve => requestAnimationFrame(() => resolve()));
+        }
+        finishGen();
+        return;
+      }
+      const N = ST.total;
+      const targetChunks = [];
+      for (let start = 0; start < N; start += 3) targetChunks.push(ST.targetArr.slice(start, start + 3));
+      ST.results = new Array(N).fill(null);
+      const generateChunk = async (chunkTargets, startIndex) => {
+        const localDeck = mode === "keep" ? poolOrig.slice() : null;
+        for (let j = 0; j < chunkTargets.length; j++) {
+          if (ST.cancel) break;
+          const target = chunkTargets[j];
+          const slotIndex = startIndex + j;
+          let r;
+          if (mode === "keep") {
+            const areaTarget = desiredArea(target);
+            const K = Math.max(1, Math.min(15, Math.ceil(localDeck.length * 0.2)));
+            let bestIdx = 0, bestDist = Math.abs(localDeck[0].area - areaTarget);
+            for (let k = 1; k < Math.min(K, localDeck.length); k++) { const d = Math.abs(localDeck[k].area - areaTarget); if (d < bestDist) { bestDist = d; bestIdx = k; } }
+            const L = localDeck.splice(bestIdx, 1)[0];
+            r = genOnLayout(L, target, adaptiveTries(L.area, tries), true, tol);
+            localDeck.push(L);
+          } else {
+            r = genForTarget(sorted, target, tries);
+          }
+          ST.results[slotIndex] = r ? { i: slotIndex + 1, ...r, target } : null;
+          done++;
+          const ok = ST.results.filter(Boolean).length;
+          updateProgress(N, ok, done);
+          await new Promise(resolve => requestAnimationFrame(() => resolve()));
+        }
+      };
+      let nextChunk = 0;
+      const workers = Array.from({ length: Math.min(concurrency, targetChunks.length) }, async () => {
+        while (!ST.cancel && nextChunk < targetChunks.length) {
+          const idx = nextChunk++;
+          await generateChunk(targetChunks[idx], idx * 3);
+          await new Promise(resolve => requestAnimationFrame(() => resolve()));
+        }
+      });
+      await Promise.all(workers);
+      finishGen();
+    } catch (err) {
+      console.error("[seq generate]", err);
+      finishGen();
+    }
   }
   function finishGen() {
     ST.busy = false; $("seqGenBtn").disabled = false; $("seqCancelBtn").style.display = "none";
+    const tol = ST.tol != null ? ST.tol : 5;
     const got = ST.results.filter(Boolean); const N = ST.total;
-    let sumErr = 0, onT = 0; got.forEach(r => { const e = Math.abs(r.score - r.target); sumErr += e; if (e <= 5) onT++; });
+    let sumErr = 0, onT = 0; got.forEach(r => { const e = Math.abs(r.score - r.target); sumErr += e; if (e <= tol) onT++; });
     const mae = got.length ? (sumErr / got.length).toFixed(1) : "—";
-    $("seqGenInfo").textContent = `Xong: ${got.length}/${N} level · MAE ${mae} · bám target (±5): ${got.length ? Math.round(onT / got.length * 100) : 0}%`
+    $("seqGenInfo").textContent = `Xong: ${got.length}/${N} level · MAE ${mae} · bám target (±${tol}): ${got.length ? Math.round(onT / got.length * 100) : 0}%`
       + (got.length < N ? ` · ${N - got.length} chỗ KHÔNG sinh được` : "")
       + (ST.skipped ? ` · ⏭ bỏ ${ST.skipped} layout > giới hạn diện tích (tăng cap nếu muốn dùng)` : "");
     drawCurve(); renderResultStats();
@@ -423,14 +511,17 @@
               </select>
             </label>
             <label class="fld" style="flex:0 0 auto" title="Bỏ qua board lớn hơn ngưỡng này (số ô). generateMap chậm SIÊU tuyến tính theo diện tích: ~400 ô ≈ 0.2s/lần, ~700 ô ≈ 1s, ~1100 ô ≈ 7s. 400 ⇒ 1000 level ~3 phút. Hạ xuống = NHANH hơn; nâng lên = level khó hơn nhưng CHẬM.">Giới hạn diện tích board <input type="number" id="seqMaxArea" min="100" max="4000" step="50" value="400" style="width:80px" /></label>
-            <label class="fld" style="flex:0 0 auto">Số lần thử / level <input type="number" id="seqTries" min="2" max="40" value="8" style="width:80px" /></label>
+            <label class="fld" style="flex:0 0 auto">Số lần thử / level <input type="number" id="seqTries" min="2" max="40" value="20" style="width:80px" /></label>
+            <label class="fld" style="flex:0 0 auto">Từ level <input type="number" id="seqCloneFrom" min="1" max="5000" value="50" style="width:70px" /></label>
+            <label class="fld" style="flex:0 0 auto">Đến level <input type="number" id="seqCloneTo" min="1" max="5000" value="100" style="width:70px" /></label>
+            <label class="fld" style="flex:0 0 auto">Độ lệch khó <input type="number" id="seqCloneDelta" min="0" max="50" value="5" style="width:70px" /></label>
             <button id="seqGenBtn" class="primary">⚙️ Sinh chuỗi level</button>
             <button id="seqCancelBtn" class="danger" style="display:none">■ Hủy</button>
             <button id="seqExportBtn" disabled>⬇ Export pack JSON</button>
           </div>
           <div class="seq-prog"><i id="seqProgBar"></i></div>
           <div class="seq-info" id="seqGenInfo" style="margin-top:8px"></div>
-          <div class="hint" style="margin-top:6px">💡 <b>Theo độ khó</b>: mỗi level tự bốc layout có diện tích hợp target (board to ⇒ khó, nhỏ ⇒ dễ). · <b>🔒 Giữ layout gốc</b>: dùng <b>deck xoay vòng không reset</b> — layout dùng xong bị đẩy xuống cuối hàng (dù thành công hay thất bại), khoảng cách tối thiểu giữa 2 lần dùng ≈ 80% pool size. Mỗi lượt nhìn top ~20% deck để chọn layout có diện tích gần target nhất. Lấp gần kín khung "đã đục" → màn TRÔNG GIỐNG layout gốc.</div>
+          <div class="hint" style="margin-top:6px">💡 <b>Clone theo khoảng level</b>: nếu điền <b>Từ level</b> và <b>Đến level</b>, hệ thống sẽ dùng các level nguồn đó làm mẫu, giữ nguyên layout + màu + fill &gt; 90%, chỉ dịch độ khó theo <b>Độ lệch khó</b>. · <b>Theo độ khó</b>: mỗi level tự bốc layout có diện tích hợp target (board to ⇒ khó, nhỏ ⇒ dễ). · <b>🔒 Giữ layout gốc</b>: dùng <b>deck xoay vòng không reset</b> — layout dùng xong bị đẩy xuống cuối hàng (dù thành công hay thất bại), khoảng cách tối thiểu giữa 2 lần dùng ≈ 80% pool size. Mỗi lượt nhìn top ~20% deck để chọn layout có diện tích gần target nhất. Lấp gần kín khung "đã đục" → màn TRÔNG GIỐNG layout gốc.</div>
           <div class="seq-stats" id="seqStats"></div>
         </div>
       </div>`;

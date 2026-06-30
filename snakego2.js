@@ -14,7 +14,8 @@
   const TIER_CLASS = ["tier1", "tier2", "tier3", "tier4", "tier5"], TIER_NUM = { "Rất dễ": 1, "Dễ": 2, "Vừa": 3, "Khó": 4, "Siêu khó": 5 };
   const clamp = (v, a, b) => v < a ? a : v > b ? b : v, rnd = n => Math.floor(Math.random() * n), $ = id => document.getElementById(id);
   const LS_KEY = "sg2-batch-v1", now = () => (typeof performance !== "undefined" ? performance.now() : Date.now());
-  const PALETTE = [1, 5, 7, 11, 14, 20, 17, 26, 29, 35, 9, 23];   // chỉ số GAME_COLORS để tô vùng
+  const AO_INDICES = [1, 2, 5, 7, 10, 13, 16, 19, 24, 25, 28, 31, 34, 37, 40, 46, 48];  // 17 màu đặt tên (AO_COLOR)
+  const PALETTE = AO_INDICES;   // chỉ số GAME_COLORS để tô vùng
   function cornerOut(type, dir) { const o = CORNER_OPEN[type], e = opp(dir); return e === o[0] ? o[1] : e === o[1] ? o[0] : null; }
   function dirOf(a, b) { const dx = Math.sign(b.x - a.x), dy = Math.sign(b.y - a.y); return dx === 1 ? "right" : dx === -1 ? "left" : dy === 1 ? "down" : "up"; }
   function inRect(c, el) { return c.x >= el.x && c.x < el.x + el.w && c.y >= el.y && c.y < el.y + el.h; }
@@ -325,8 +326,8 @@
   // Bộ palette tuyển sẵn + sinh palette theo LÝ THUYẾT MÀU (analogous/bổ-túc/tam-giác/split/đơn-sắc)
   // -> mỗi level một bộ màu hài hoà KHÁC nhau (đa dạng thật), vùng kề luôn tương phản theo ΔE CIELAB.
   const COLOR_PALETTES = [
-    [1, 5, 7, 11, 14, 20, 17, 26], [1, 3, 26, 29, 11, 14, 38, 32], [5, 20, 7, 22, 17, 35, 14, 47],
-    [3, 6, 9, 12, 15, 18, 27, 33], [11, 32, 35, 26, 40, 38, 7, 5], [14, 16, 1, 26, 11, 20, 5, 47],
+    [1, 10, 7, 5, 13, 19, 16, 28], [2, 25, 28, 31, 13, 1, 37, 46], [5, 19, 7, 16, 24, 34, 40, 48],
+    [10, 31, 25, 7, 34, 40, 28, 1], [16, 24, 7, 28, 13, 25, 48, 46], [1, 5, 7, 10, 13, 16, 19, 28],
   ];
   const _labCache = {}, _hslCache = {};
   function _rgb(idx) { const h = (typeof GAME_COLORS !== "undefined" && GAME_COLORS[idx - 1]) || "#888888"; return [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)]; }
@@ -343,7 +344,7 @@
     else if (mode === 3) hues = [base, base + 150, base + 210, base + 25, base + 175, base + 185];
     else hues = [base, base, base, base, base, base];
     hues = hues.map(h => ((h % 360) + 360) % 360);
-    const cand = []; for (let i = 1; i <= GAME_COLORS.length; i++) { const [h, s, l] = _hsl(i); cand.push({ i, h, s, l }); }
+    const cand = []; for (const i of AO_INDICES) { const [h, s, l] = _hsl(i); cand.push({ i, h, s, l }); }
     const used = new Set(), pal = [];
     for (let k = 0; pal.length < 8 && k < 64; k++) {
       const th = hues[k % hues.length], wantL = 0.30 + 0.45 * (pal.length / 7); let best = null, bs = 1e9;
@@ -808,7 +809,7 @@
         <div class="cedit-side"><div class="cedit-hint" id="sg2CeHint"></div><div class="cedit-swatches" id="sg2CeSw"></div></div></div>
       <div class="cedit-foot"><button id="sg2CeAll">Chọn hết</button><button id="sg2CeNone">Bỏ chọn</button><button id="sg2CeRand">🎲 Tô lại vùng</button><span class="cedit-spacer"></span><button id="sg2CeCancel">Hủy</button><button id="sg2CeSave" class="primary">Lưu</button></div></div>`;
     document.body.appendChild(bd);
-    const sw = $("sg2CeSw"); for (let i = 1; i <= (typeof GAME_COLORS !== "undefined" ? GAME_COLORS.length : 48); i++) { const b = document.createElement("button"); b.className = "cedit-sw"; b.style.background = (typeof gameColor === "function" ? gameColor(i) : "#888"); b.dataset.ci = i; b.addEventListener("click", () => ceApply(i)); sw.appendChild(b); }
+    const sw = $("sg2CeSw"); for (const i of AO_INDICES) { const b = document.createElement("button"); b.className = "cedit-sw"; b.style.background = (typeof gameColor === "function" ? gameColor(i) : "#888"); b.dataset.ci = i; b.addEventListener("click", () => ceApply(i)); sw.appendChild(b); }
     CE.cv = $("sg2CeCv"); CE.ctx = CE.cv.getContext("2d"); CE.cv.addEventListener("click", ceClick);
     $("sg2CeClose").addEventListener("click", ceClose); $("sg2CeCancel").addEventListener("click", ceClose);
     $("sg2CeSave").addEventListener("click", ceSave); $("sg2CeAll").addEventListener("click", () => { CE.sel = new Set(CE.lvl.snakes.filter(s => !s.mother).map(s => s.id)); ceHint(); ceDraw(); });
@@ -1167,13 +1168,21 @@
       if (ob.Type === 1) items.wb.push({ x, y, n: ob.Value > 0 ? ob.Value : 1 });
       else if (ob.Type === 2) items.bh.push({ x, y });
     });
+    let d = null;
+    if (!items.wb.length && !items.bh.length && typeof computeDifficulty === "function") {
+      try {
+        d = computeDifficulty(snakes.map((s, i) => ({ id: i + 1, dir: s.dir, cells: s.cells.map(c => ({ ...c })) })), w, h);
+      } catch (e) {}
+    }
     const name = o._name || (o.LevelId != null ? "level_" + o.LevelId : null);   // giữ TÊN level gốc (vd "level_1")
-    return { id: nextId++, W: w, H: h, snakes, items, score: 0, tier: TIERS[0][1], emoji: "", shapeName: "rect", ...(name ? { name } : {}), ...(o.LevelUId != null ? { srcUid: o.LevelUId } : {}), ...(o.LevelId != null ? { srcLid: o.LevelId } : {}) };   // KHÔNG tính độ khó (3404 level -> nặng)
+    return { id: nextId++, W: w, H: h, snakes, items, score: d ? d.score : 0, tier: d ? d.tier : TIERS[0][1], emoji: d ? d.emoji : "", shapeName: "rect", ...(name ? { name } : {}), ...(o.LevelUId != null ? { srcUid: o.LevelUId } : {}), ...(o.LevelId != null ? { srcLid: o.LevelId } : {}) };
   }
   // 1 object thô (bất kỳ định dạng) -> 1 level SG2, hoặc null nếu không nhận diện được.
   function coerceToSG2(o) {
     if (!o || typeof o !== "object") return null;
-    if (isArrowsOut(o)) return arrowsOutToSG2(o);   // FORMAT GAME "ArrowsOut" (ColorType/Direction) — phải bắt TRƯỚC isGameFormat
+    // ArrowsOut có Direction string → aoNeedFlip tự dò hướng lật.
+    // Không có Direction (chỉ Dx/Dy) → chuẩn game format, fall-through sang fromGameLevel để Y-flip đúng.
+    if (isArrowsOut(o) && Array.isArray(o.Arrows) && o.Arrows.some(a => a.Direction)) return arrowsOutToSG2(o);
     if (Array.isArray(o.snakes)) {   // SG2 native
       const W = o.W || o.w, H = o.H || o.h; if (!W || !H) return null;
       const snakes = o.snakes.map((s, i) => { const ns = { id: s.id != null ? s.id : i + 1, dir: s.dir, cells: (s.cells || []).map(_xy), link: s.link != null ? s.link : null }; if (s.mother) ns.mother = true; if (typeof s.fixedColor === "number") ns.fixedColor = s.fixedColor; if (s.ev) ns.ev = s.ev; return ns; });

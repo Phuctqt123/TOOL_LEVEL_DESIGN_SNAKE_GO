@@ -35,3 +35,5 @@
   overflow: hidden; margin-top: 8px; }
 .seq-prog > i { display: block; height: 100%; width: 0; background: linear-gradient(90deg, var(--accent2), var(--accent)); transition: width .15s; }
 .seq-prst { padding: 6px 10px; min-height: 32px; font-size: 12px; }
+/* Tắt animation cardIn bên trong seqView — các card được mount cùng lúc, nhiều animation đồng thời gây jank */
+#seqView .card { animation: none; }
