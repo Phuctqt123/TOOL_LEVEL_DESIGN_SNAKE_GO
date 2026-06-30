@@ -95,6 +95,8 @@
     anchors: [],        // [{L, v}] điểm neo curve (kéo y)
     targetArr: null,    // mảng target theo level (1..total)
     results: [],        // [{i,W,H,pieces,mask,score,tier,target}]
+    progressTotal: 1000,
+    progressPoints: [], // [{level, difficulty}] dùng cho biểu đồ tiến độ
     busy: false, cancel: false
   };
 
@@ -157,11 +159,45 @@
     g.fillStyle = "#5b9dff";
     ST.baseScores.forEach((s, i) => { if (s == null) return; const x = cvX(i + 1), y = cvY(s); g.beginPath(); g.arc(x, y, 1.7, 0, 7); g.fill(); });
     // đường target (vàng)
-    if (ST.targetArr) { g.strokeStyle = "#e0b84f"; g.lineWidth = 2; g.beginPath(); for (let i = 0; i < ST.total; i += Math.max(1, Math.floor(ST.total / 360))) { const x = cvX(i + 1), y = cvY(ST.targetArr[i]); i ? g.lineTo(x, y) : g.moveTo(x, y); } g.stroke(); }
+    if (ST.targetArr) {
+      const step = Math.max(1, Math.floor(ST.total / 360));
+      g.strokeStyle = "#e0b84f"; g.lineWidth = 2; g.beginPath();
+      for (let i = 0; i < ST.total; i += step) { const x = cvX(i + 1), y = cvY(ST.targetArr[i]); i ? g.lineTo(x, y) : g.moveTo(x, y); }
+      if (ST.total > 0 && ((ST.total - 1) % step !== 0)) {
+        const x = cvX(ST.total), y = cvY(ST.targetArr[ST.total - 1]); g.lineTo(x, y);
+      }
+      g.stroke();
+    }
     // điểm đã sinh (xanh lá)
     if (ST.results.length) { g.fillStyle = "rgba(79,208,138,.85)"; ST.results.forEach(r => { if (r == null) return; const x = cvX(r.i), y = cvY(r.score); g.beginPath(); g.arc(x, y, 1.4, 0, 7); g.fill(); }); }
     // điểm neo (kéo được)
     ST.anchors.forEach(a => { const x = cvX(a.L), y = cvY(a.v); g.beginPath(); g.arc(x, y, 5, 0, 7); g.fillStyle = "#e6e9ef"; g.fill(); g.strokeStyle = "#0f1115"; g.lineWidth = 1.5; g.stroke(); });
+  }
+  function drawProgressChart() {
+    const cv = $("seqProgressChart"); if (!cv) return;
+    const W = 720, H = 180, PAD = { l: 52, r: 16, t: 18, b: 30 };
+    cv.width = W; cv.height = H;
+    const g = cv.getContext("2d"); g.clearRect(0, 0, W, H); g.fillStyle = "#0e1424"; g.fillRect(0, 0, W, H);
+    g.strokeStyle = "rgba(255,255,255,0.95)"; g.lineWidth = 1; g.strokeRect(PAD.l - 1, PAD.t - 1, W - PAD.l - PAD.r + 1, H - PAD.t - PAD.b + 1);
+    g.font = "11px sans-serif";
+    const total = Math.max(1, ST.progressTotal || ST.total || 1);
+    const pts = (ST.progressPoints || []).slice().sort((a, b) => a.level - b.level);
+    const maxY = 100;
+    const xOf = idx => PAD.l + (idx / Math.max(1, total - 1)) * (W - PAD.l - PAD.r);
+    const yOf = val => H - PAD.b - (val / maxY) * (H - PAD.t - PAD.b);
+    g.strokeStyle = "rgba(255,255,255,.16)"; g.lineWidth = 1;
+    [0, 20, 40, 60, 80, 100].forEach(v => { const y = yOf(v); g.beginPath(); g.moveTo(PAD.l, y); g.lineTo(W - PAD.r, y); g.stroke(); g.fillStyle = "rgba(255,255,255,.8)"; g.fillText(String(v), 8, y + 3); });
+    g.fillStyle = "rgba(255,255,255,.85)"; g.fillText("Độ khó", 8, 12); g.fillText("Level", W - 44, H - 8);
+    g.fillStyle = "rgba(255,255,255,.75)"; g.fillText("0", PAD.l - 16, H - PAD.b + 3); g.fillText(String(total), W - PAD.r - 12, H - PAD.b + 3);
+    if (pts.length > 1) {
+      g.strokeStyle = "#4fd08a"; g.lineWidth = 2.6; g.beginPath();
+      pts.forEach((p, i) => { const x = xOf(Math.max(0, Math.min(total - 1, p.level - 1))); const y = yOf(p.difficulty || 50); if (i) g.lineTo(x, y); else g.moveTo(x, y); });
+      g.stroke();
+      const last = pts[pts.length - 1]; if (last) { g.fillStyle = "#f0c36d"; g.beginPath(); g.arc(xOf(Math.max(0, Math.min(total - 1, last.level - 1))), yOf(last.difficulty || 50), 3.8, 0, 7); g.fill(); }
+    } else {
+      g.fillStyle = "rgba(255,255,255,.82)"; g.fillText("Chưa bắt đầu sinh", PAD.l + 8, PAD.t + 14);
+    }
+    g.fillStyle = "rgba(255,255,255,.92)"; g.fillText(`Đã sinh: ${pts.length}/${total}`, PAD.l + 8, PAD.t + 14);
   }
 
   /* ---------- Sinh theo target ----------
@@ -261,16 +297,32 @@
     }
   }
   let seqWorkerURL = null;
+  function genCloneLayout(L, tries) {
+    if (typeof generateMap !== "function" || typeof computeDifficulty !== "function" || !L) return null;
+    const attempts = Math.max(1, Math.min(5, Math.floor(tries || 3)));
+    let best = null;
+    for (let k = 0; k < attempts; k++) {
+      const fill = 0.96 + Math.random() * 0.03;
+      const longPref = 35 + Math.random() * 40;
+      const dparam = 30 + Math.random() * 40;
+      let pieces; try { pieces = generateMap(L.W, L.H, longPref, dparam, 0, { mask: L.mask, fill }); } catch (e) { continue; }
+      if (!pieces || pieces.length < 2) continue;
+      const d = computeDifficulty(pieces, L.W, L.H);
+      if (!d || d.tier === "KẸT" || !d.score) continue;
+      best = { W: L.W, H: L.H, mask: L.mask, pieces, score: d.score, tier: d.tier, srcName: L.name };
+      if (k >= 1) break;
+    }
+    return best;
+  }
   function buildCloneWorkerURL() {
     if (seqWorkerURL) return seqWorkerURL;
-    const fns = [clamp, inBoard, solve, depMetrics, movableList, analyzeSolve, percRisk, percDynamic, regionSeparation, intraDifficulty, computeDifficulty, rint, shuffle, growSnake, snakeLen, generateMap];
+    const fns = [clamp, inBoard, solve, rint, shuffle, growSnake, snakeLen, generateMap, computeDifficulty];
     let src = '"use strict";\n';
     src += 'const DIRS=' + JSON.stringify(DIRS) + ';\n';
     src += 'const DELTA=' + JSON.stringify(DELTA) + ';\n';
     src += 'const MAXSNAKES=' + MAXSNAKES + ';\n';
-    src += 'const DIFF_TIERS=' + JSON.stringify(DIFF_TIERS) + ';\n';
     for (const fn of fns) src += fn.toString() + '\n';
-    src += `function genCloneCandidate(W,H,maskArr,target,tries,tolerance){ const mask = maskArr && maskArr.length ? new Set(maskArr) : null; let best = null, bestErr = 1e9; const baseFill = 0.92 + Math.random() * 0.04; for (let k = 0; k < tries; k++) { let fill = clamp(baseFill + (Math.random() * 2 - 1) * 0.02, 0.90, 0.98); const longPref = clamp(85 - (target / 100) * 70 + (Math.random() * 8 - 4), 0, 95); const dparam = clamp(target + (Math.random() * 2 - 1) * 10, 0, 100); let pieces; try { pieces = generateMap(W, H, longPref, dparam, 0, { mask, fill }); } catch (e) { continue; } if (!pieces || pieces.length < 2) continue; const d = computeDifficulty(pieces, W, H); if (d.tier === 'KẸT' || !d.score) continue; const err = Math.abs(d.score - target); if (err < bestErr) { bestErr = err; best = { W, H, mask: maskArr || [], pieces, score: d.score, tier: d.tier, srcName: '' }; if (err <= tolerance) break; } } return best; } self.onmessage = function (e) { const m = e.data; const res = genCloneCandidate(m.W, m.H, m.maskArr || [], m.target, m.tries || 2, m.tolerance || 5); self.postMessage(res); };`;
+    src += `function genCloneCandidate(W,H,maskArr,tries){ const mask = maskArr && maskArr.length ? new Set(maskArr) : null; for (let k = 0; k < Math.max(1, Math.min(5, tries || 3)); k++) { const fill = 0.96 + Math.random() * 0.03; const longPref = 35 + Math.random() * 40; const dparam = 30 + Math.random() * 40; try { const pieces = generateMap(W, H, longPref, dparam, 0, { mask, fill }); if (pieces && pieces.length >= 2) { const d = computeDifficulty(pieces, W, H); if (d && d.tier !== 'KẸT' && d.score) return { W, H, mask: maskArr || [], pieces, score: d.score, tier: d.tier, srcName: '' }; } } catch (e) {} } return null; } self.onmessage = function (e) { const m = e.data; self.postMessage(genCloneCandidate(m.W, m.H, m.maskArr || [], m.tries || 3)); };`;
     seqWorkerURL = URL.createObjectURL(new Blob([src], { type: 'application/javascript' }));
     return seqWorkerURL;
   }
@@ -282,121 +334,67 @@
       const timer = setTimeout(() => { try { worker.terminate(); } catch (e) {} resolve(null); }, 12000);
       worker.onmessage = (ev) => { clearTimeout(timer); try { worker.terminate(); } catch (e) {} resolve(ev.data || null); };
       worker.onerror = () => { clearTimeout(timer); try { worker.terminate(); } catch (e) {} resolve(null); };
-      worker.postMessage({ W: layout.W, H: layout.H, maskArr: Array.from(layout.mask || []), target, tries: Math.max(1, Math.min(3, Math.ceil(tries / 8))), tolerance });
+      worker.postMessage({ W: layout.W, H: layout.H, maskArr: Array.from(layout.mask || []), tries: Math.max(1, Math.min(5, tries || 3)) });
     });
   }
 
   async function runGenerate() {
     if (ST.busy) return;
     if (!ST.pool.length) { $("seqGenInfo").textContent = "⚠ Chưa có layout — nạp dữ liệu Arrow Out trước."; return; }
-    if (!ST.targetArr) { $("seqGenInfo").textContent = "⚠ Chưa có đường cong — bấm “Auto-fit từ baseline”."; return; }
     ST.busy = true; ST.cancel = false; ST.results = []; ST.tol = 5;
     $("seqGenBtn").disabled = true; $("seqCancelBtn").style.display = "inline-flex";
-    const tries = clamp(parseInt($("seqTries").value) || 10, 2, 40);
-    const tol = clamp(parseFloat($("seqCloneTol") ? $("seqCloneTol").value : "5") || 5, 0, 100);
+    const tol = 5;
     ST.tol = tol;
-    const mode = $("seqLayoutMode") ? $("seqLayoutMode").value : "diff";   // "diff" = chọn theo độ khó · "keep" = 🔒 giữ layout gốc, lặp lại
     const cloneFrom = clamp(parseInt($("seqCloneFrom").value) || 1, 1, Math.max(1, ST.raw.length));
     const cloneTo = clamp(parseInt($("seqCloneTo").value) || cloneFrom, cloneFrom, Math.max(cloneFrom, ST.raw.length));
-    const cloneDelta = clamp(parseInt($("seqCloneDelta").value) || 0, 0, 50);
     const useCloneRange = !!ST.raw.length && cloneFrom <= cloneTo && cloneFrom <= ST.raw.length;
-    const maxArea = clamp(parseInt($("seqMaxArea").value) || 400, 100, 4000);
-    const within = ST.pool.filter(L => L.area <= maxArea);
-    const usable = within.length ? within : ST.pool.slice().sort((a, b) => a.area - b.area).slice(0, 1);
-    const skipped = ST.pool.length - within.length;
-    ST.skipped = mode === "keep" ? skipped : 0;
-    const sorted = usable.slice().sort((a, b) => a.area - b.area), poolOrig = usable;
+    ST.progressTotal = useCloneRange ? Math.max(1, cloneTo - cloneFrom + 1) : Math.max(1, ST.total || 1);
+    ST.progressPoints = [];
     const startT = now();
     let done = 0;
     const cpuCores = typeof navigator !== "undefined" && navigator.hardwareConcurrency ? navigator.hardwareConcurrency : 8;
     const concurrency = Math.max(4, Math.min(12, cpuCores));
-    const chunkSize = Math.max(6, Math.min(12, Math.ceil(cpuCores / 1.5)));
-    const threadLabel = `${concurrency} luồng · ${chunkSize} level/đợt`;
+    const threadLabel = `${concurrency} luồng`;
 
     const updateProgress = (N, ok, current) => {
       const el = (now() - startT) / 1000, rate = current / Math.max(0.001, el);
       const eta = rate > 0 ? Math.round((N - current) / rate) : 0;
       $("seqProgBar").style.width = Math.round(current / N * 100) + "%";
-      $("seqGenInfo").textContent = `Đang sinh ${current}/${N} · đạt ${ok} · ${rate.toFixed(1)} lv/s · còn ~${eta}s · ${threadLabel}`;
-      if (current % Math.max(1, Math.floor(N / 50)) < 2) drawCurve();
+      $("seqGenInfo").textContent = `Đang clone ${current}/${N} · đạt ${ok} · ${rate.toFixed(1)} lv/s · còn ~${eta}s · ${threadLabel}`;
+      drawProgressChart();
     };
 
     try {
-      if (useCloneRange) {
-        const srcLevels = ST.raw.slice(cloneFrom - 1, cloneTo);
-        const cloneSources = [];
-        for (const raw of srcLevels) {
-          const layout = maskFromLevel(raw); if (!layout) continue;
-          const measured = measureBaseline(raw);
-          const base = measured != null ? measured : 50;
-          const offset = (Math.random() * 2 - 1) * cloneDelta;
-          const target = clamp(Math.round(base + offset), 0, 100);
-          cloneSources.push({ raw, layout, target });
-        }
-        if (!cloneSources.length) { $("seqGenInfo").textContent = "⚠ Không có level nguồn hợp lệ trong khoảng clone."; finishGen(); return; }
-        const N = cloneSources.length;
-        ST.results = new Array(N).fill(null);
-        let nextClone = 0;
-        const clonePool = Array.from({ length: Math.min(concurrency, Math.max(4, N)) }, async () => {
-          while (!ST.cancel && nextClone < N) {
-            const i = nextClone++;
-            const { raw, layout, target } = cloneSources[i];
-            const cloneTryCount = Math.max(1, Math.min(3, Math.ceil(tries / 8)));
-            const workerResult = await runCloneGeneration(layout, target, cloneTryCount, tol);
-            const r = workerResult || genOnLayout(layout, target, adaptiveTries(layout.area, cloneTryCount), true, tol);
-            if (r) {
-              const colorSpec = buildCloneColorMap(raw);
-              applyCloneColorsToPieces(r.pieces, colorSpec);
-              ST.results[i] = { i: i + 1, ...r, target, srcName: layout.name || raw._name || `clone_${i + 1}` };
-            }
-            done++;
-            const ok = ST.results.filter(Boolean).length;
-            updateProgress(N, ok, done);
-            await new Promise(resolve => requestAnimationFrame(() => resolve()));
-          }
-        });
-        await Promise.all(clonePool);
-        finishGen();
-        return;
+      const srcLevels = useCloneRange ? ST.raw.slice(cloneFrom - 1, cloneTo) : ST.raw.slice();
+      const cloneSources = [];
+      for (const raw of srcLevels) {
+        const layout = maskFromLevel(raw); if (!layout) continue;
+        cloneSources.push({ raw, layout });
       }
-      const N = ST.total;
-      const targetChunks = [];
-      for (let start = 0; start < N; start += chunkSize) targetChunks.push(ST.targetArr.slice(start, start + chunkSize));
+      if (!cloneSources.length) { $("seqGenInfo").textContent = "⚠ Không có level nguồn hợp lệ trong khoảng clone."; finishGen(); return; }
+      const N = cloneSources.length;
       ST.results = new Array(N).fill(null);
-      const generateChunk = async (chunkTargets, startIndex) => {
-        const localDeck = mode === "keep" ? poolOrig.slice() : null;
-        for (let j = 0; j < chunkTargets.length; j++) {
-          if (ST.cancel) break;
-          const target = chunkTargets[j];
-          const slotIndex = startIndex + j;
-          let r;
-          if (mode === "keep") {
-            const areaTarget = desiredArea(target);
-            const K = Math.max(1, Math.min(15, Math.ceil(localDeck.length * 0.2)));
-            let bestIdx = 0, bestDist = Math.abs(localDeck[0].area - areaTarget);
-            for (let k = 1; k < Math.min(K, localDeck.length); k++) { const d = Math.abs(localDeck[k].area - areaTarget); if (d < bestDist) { bestDist = d; bestIdx = k; } }
-            const L = localDeck.splice(bestIdx, 1)[0];
-            r = genOnLayout(L, target, adaptiveTries(L.area, tries), true, tol);
-            localDeck.push(L);
-          } else {
-            r = genForTarget(sorted, target, tries);
+      let nextClone = 0;
+      const clonePool = Array.from({ length: Math.min(concurrency, Math.max(4, N)) }, async () => {
+        while (!ST.cancel && nextClone < N) {
+          const i = nextClone++;
+          const { raw, layout } = cloneSources[i];
+          const cloneTryCount = 3;
+          const workerResult = await runCloneGeneration(layout, 0, cloneTryCount, tol);
+          const r = workerResult || genCloneLayout(layout, cloneTryCount);
+          if (r) {
+            const colorSpec = buildCloneColorMap(raw);
+            applyCloneColorsToPieces(r.pieces, colorSpec);
+            ST.results[i] = { i: i + 1, ...r, srcName: layout.name || raw._name || `clone_${i + 1}` };
+            ST.progressPoints.push({ level: i + 1, difficulty: r.score || 50 });
           }
-          ST.results[slotIndex] = r ? { i: slotIndex + 1, ...r, target } : null;
           done++;
           const ok = ST.results.filter(Boolean).length;
           updateProgress(N, ok, done);
           await new Promise(resolve => requestAnimationFrame(() => resolve()));
         }
-      };
-      let nextChunk = 0;
-      const workers = Array.from({ length: Math.min(concurrency, targetChunks.length) }, async () => {
-        while (!ST.cancel && nextChunk < targetChunks.length) {
-          const idx = nextChunk++;
-          await generateChunk(targetChunks[idx], idx * chunkSize);
-          await new Promise(resolve => requestAnimationFrame(() => resolve()));
-        }
       });
-      await Promise.all(workers);
+      await Promise.all(clonePool);
       finishGen();
     } catch (err) {
       console.error("[seq generate]", err);
@@ -521,39 +519,18 @@
         </div>
 
         <div class="card">
-          <h2><span class="step-no">2</span> Đường cong độ khó (auto-fit baseline → ngoại suy, kéo điểm để chỉnh)</h2>
-          <div class="row" style="margin-bottom:8px">
-            <button id="seqAutoBtn">✨ Auto-fit từ baseline</button>
-            <span class="hint" style="align-self:center">Preset:</span>
-            <button class="seq-prst" data-k="linear">Tuyến tính</button>
-            <button class="seq-prst" data-k="easein">Ease-in</button>
-            <button class="seq-prst" data-k="scurve">S-curve</button>
-          </div>
-          <div class="seq-curve-wrap"><canvas id="seqCurve"></canvas></div>
-          <div class="seq-legend"><span><i class="base"></i> điểm đo baseline</span><span><i class="tgt"></i> đường target</span><span><i class="got"></i> level đã sinh</span></div>
-        </div>
-
-        <div class="card">
-          <h2><span class="step-no">3</span> Sinh level theo curve (layout chọn theo độ khó mục tiêu)</h2>
+          <h2><span class="step-no">2</span> Clone layout + màu + fill cao</h2>
           <div class="row" style="align-items:flex-end">
-            <label class="fld" style="flex:0 0 auto">Nguồn layout
-              <select id="seqLayoutMode">
-                <option value="diff">Theo độ khó (board hợp target)</option>
-                <option value="keep">🔒 Giữ layout gốc (lặp lại)</option>
-              </select>
-            </label>
-            <label class="fld" style="flex:0 0 auto" title="Bỏ qua board lớn hơn ngưỡng này (số ô). generateMap chậm SIÊU tuyến tính theo diện tích: ~400 ô ≈ 0.2s/lần, ~700 ô ≈ 1s, ~1100 ô ≈ 7s. 400 ⇒ 1000 level ~3 phút. Hạ xuống = NHANH hơn; nâng lên = level khó hơn nhưng CHẬM.">Giới hạn diện tích board <input type="number" id="seqMaxArea" min="100" max="4000" step="50" value="400" style="width:80px" /></label>
-            <label class="fld" style="flex:0 0 auto">Số lần thử / level <input type="number" id="seqTries" min="2" max="40" value="20" style="width:80px" /></label>
             <label class="fld" style="flex:0 0 auto">Từ level <input type="number" id="seqCloneFrom" min="1" max="5000" value="50" style="width:70px" /></label>
             <label class="fld" style="flex:0 0 auto">Đến level <input type="number" id="seqCloneTo" min="1" max="5000" value="100" style="width:70px" /></label>
-            <label class="fld" style="flex:0 0 auto">Độ lệch khó <input type="number" id="seqCloneDelta" min="0" max="50" value="5" style="width:70px" /></label>
             <button id="seqGenBtn" class="primary">⚙️ Sinh chuỗi level</button>
             <button id="seqCancelBtn" class="danger" style="display:none">■ Hủy</button>
             <button id="seqExportBtn" disabled>⬇ Export pack JSON</button>
           </div>
           <div class="seq-prog"><i id="seqProgBar"></i></div>
+          <div style="margin-top:8px"><canvas id="seqProgressChart" style="width:100%;height:180px"></canvas></div>
           <div class="seq-info" id="seqGenInfo" style="margin-top:8px"></div>
-          <div class="hint" style="margin-top:6px">💡 <b>Clone theo khoảng level</b>: nếu điền <b>Từ level</b> và <b>Đến level</b>, hệ thống sẽ dùng các level nguồn đó làm mẫu, giữ nguyên layout + màu + fill &gt; 90%, chỉ dịch độ khó theo <b>Độ lệch khó</b>. · <b>Theo độ khó</b>: mỗi level tự bốc layout có diện tích hợp target (board to ⇒ khó, nhỏ ⇒ dễ). · <b>🔒 Giữ layout gốc</b>: dùng <b>deck xoay vòng không reset</b> — layout dùng xong bị đẩy xuống cuối hàng (dù thành công hay thất bại), khoảng cách tối thiểu giữa 2 lần dùng ≈ 80% pool size. Mỗi lượt nhìn top ~20% deck để chọn layout có diện tích gần target nhất. Lấp gần kín khung "đã đục" → màn TRÔNG GIỐNG layout gốc.</div>
+          <div class="hint" style="margin-top:6px">💡 <b>Clone theo khoảng level</b>: nếu điền <b>Từ level</b> và <b>Đến level</b>, hệ thống sẽ dùng các level nguồn làm mẫu, giữ nguyên layout + màu và cố gắng lấp kín khung với fill cao (&gt;95%).</div>
           <div class="seq-stats" id="seqStats"></div>
         </div>
       </div>`;
@@ -566,12 +543,10 @@
     drop.addEventListener("dragleave", () => drop.classList.remove("drag"));
     drop.addEventListener("drop", e => { e.preventDefault(); drop.classList.remove("drag"); if (e.dataTransfer && e.dataTransfer.files.length) ingest(e.dataTransfer.files); });
     $("seqMeasureBtn").addEventListener("click", measureBaselineChunked);
-    $("seqAutoBtn").addEventListener("click", () => { if (!ST.baseScores.filter(s => s != null).length) { $("seqBaseInfo").textContent = "⚠ Hãy đo baseline trước."; return; } autoFitCurve(); });
-    host.querySelectorAll(".seq-prst").forEach(b => b.addEventListener("click", () => presetCurve(b.dataset.k)));
     $("seqGenBtn").addEventListener("click", runGenerate);
     $("seqCancelBtn").addEventListener("click", () => { ST.cancel = true; });
     $("seqExportBtn").addEventListener("click", exportPack);
-    bindCurve(); rebuildTarget(); drawCurve();
+    rebuildTarget(); drawCurve();
   }
 
   function showOthers(show) {
