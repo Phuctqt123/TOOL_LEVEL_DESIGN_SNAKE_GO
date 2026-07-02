@@ -16,7 +16,7 @@
     curve: [{ t: 0, v: 12 }, { t: 1, v: 90 }],
     library: [], selection: new Set(), displayOrder: [],
     sort: "index", filter: "all",
-    fillTarget: 100, minL: 2, maxL: 0,   // fill 50–100 (=100 ép kín); minL/maxL độ dài rắn (maxL 0 = auto)
+    fillTarget: 100,   // fill 50–100 (=100 ép kín). (Đã bỏ minL/maxL — engine dùng mặc định minL=2, maxL=auto)
     diffMode: "curve", diffMin: 0, diffMax: 100,   // độ khó: 'curve' | 'range' (min..max; mặc định 0–100 = sao cũng được)
     cloneColorMap: null, cloneColorDominant: -1, clonePinned: null, cloneKeep: false, cloneExact: false, cloneSource: null,   // nhân bản: bản đồ màu; cloneKeep = bắt chước màu gốc; cloneExact = giữ NGUYÊN màu (không xoay hue)
     generating: false, cancel: false, dragIdx: -1,
@@ -992,7 +992,7 @@ self.onmessage = function (e) {
     const perLevelZones = !genZoneMap;   // không phải clone -> mỗi level 1 cách chia vùng riêng
     const IP_BAND = { early: { min: 0, max: 0.42 }, mid: { min: 0.33, max: 0.67 }, late: { min: 0.55, max: 1 } };
     const intraPeak = IP_BAND[$b("bIntraPeak") ? $b("bIntraPeak").value : ""] || null;   // ép vị trí đỉnh-khó-trong-màn (chấm đỏ sparkline)
-    const params = { diff: 50, mother: $b("bMother").checked, fill: clamp(B.fillTarget, 50, 100) / 100, minL: clamp(B.minL, 2, 99), maxL: clamp(B.maxL, 0, 9999), pinned: B.clonePinned || null, zoneMap: genZoneMap, perLevelZones, trap: trapMode, intraPeak };   // rắn GIỚI HẠN trong vùng -> màu liền mạch; trap -> genFull seed hàng đầu quay-ra
+    const params = { diff: 50, mother: $b("bMother").checked, fill: clamp(B.fillTarget, 50, 100) / 100, minL: 2, maxL: 0, pinned: B.clonePinned || null, zoneMap: genZoneMap, perLevelZones, trap: trapMode, intraPeak };   // minL/maxL = MẶC ĐỊNH (đã bỏ 2 tham số "Dài tối thiểu/tối đa"); rắn GIỚI HẠN trong vùng -> màu liền mạch
     const dedup = true, startId = nextLibId();   // luôn bỏ trùng
     const wantParallel = typeof Worker !== "undefined" && count >= 8;   // luôn xử lý song song (tự fallback 1 luồng nếu bị chặn)
 
@@ -1235,25 +1235,34 @@ self.onmessage = function (e) {
     let minx = W, maxx = 0, miny = H, maxy = 0;
     cells.forEach(k => { const i = k.indexOf(","), x = +k.slice(0, i), y = +k.slice(i + 1); if (x < minx) minx = x; if (x > maxx) maxx = x; if (y < miny) miny = y; if (y > maxy) maxy = y; });
     const spanx = maxx - minx + 1, spany = maxy - miny + 1, cx = (minx + maxx) / 2, cy = (miny + maxy) / 2;
-    const modes = ["stripesV", "stripesH", "diagNW", "diagNE", "quad", "pie", "rings", "xcross", "frames", "grid", "cornerFan", "chevron", "diagGrid", "radial", "arch"], mode = modes[rint(modes.length)];
-    const K = clamp(2 + rint(4), 2, 6);   // 2..5 dải/múi/vành
-    const gk = clamp(2 + rint(2), 2, 3), corner = [[minx, miny], [maxx, miny], [minx, maxy], [maxx, maxy]][rint(4)];   // tham số cho grid / cornerFan
+    const modes = ["stripesV", "stripesH", "diagNW", "diagNE", "quad", "pie", "rings", "xcross", "frames", "grid", "cornerFan", "chevron", "diagGrid", "radial", "arch", "rotStripes", "wave", "spiral", "checker"], mode = modes[rint(modes.length)];
+    const K = clamp(2 + rint(5), 2, 6);   // 2..6 dải/múi/vành
+    const gk = clamp(2 + rint(3), 2, 4), corner = [[minx, miny], [maxx, miny], [minx, maxy], [maxx, maxy]][rint(4)];   // tham số cho grid / cornerFan
+    // NGẪU NHIÊN HOÁ để 100 level tô khác nhau: phase lệch gốc + dải KHÔNG đều (ngưỡng random) + góc xoay tự do.
+    const phase = Math.random();                                   // dịch gốc dải/múi/vành mỗi level
+    const bnd = []; for (let i = 0; i < K - 1; i++) bnd.push(Math.random()); bnd.sort((a, b) => a - b);   // ranh giới dải KHÔNG đều
+    const band = t => { t = ((t % 1) + 1) % 1; let n = 0; for (const b of bnd) if (t >= b) n++; return n; };   // 0..K-1 theo dải không đều
+    const ang = Math.random() * Math.PI, ca = Math.cos(ang), sa = Math.sin(ang), wav = 0.12 + Math.random() * 0.25, freq = 1 + rint(3);   // rotStripes/wave
     const labelOf = (x, y) => {
-      const dx = x - cx, dy = y - cy;
-      if (mode === "stripesV") return Math.floor((x - minx) / spanx * K);
-      if (mode === "stripesH") return Math.floor((y - miny) / spany * K);
-      if (mode === "diagNW") return Math.floor(((x - minx) + (y - miny)) / (spanx + spany) * K);   // cắt chéo \
-      if (mode === "diagNE") return Math.floor(((x - minx) + (maxy - y)) / (spanx + spany) * K);   // cắt chéo /
+      const dx = x - cx, dy = y - cy, nx = (x - minx) / (spanx || 1), ny = (y - miny) / (spany || 1);
+      if (mode === "stripesV") return band(nx + phase);
+      if (mode === "stripesH") return band(ny + phase);
+      if (mode === "diagNW") return band((nx + ny) / 2 + phase);          // cắt chéo \
+      if (mode === "diagNE") return band((nx + (1 - ny)) / 2 + phase);    // cắt chéo /
+      if (mode === "rotStripes") return band((nx * ca + ny * sa) + phase);                        // dải XOAY góc tự do
+      if (mode === "wave") return band(nx + wav * Math.sin((ny + phase) * Math.PI * 2 * freq) + phase);   // dải LƯỢN sóng
+      if (mode === "spiral") { const a = Math.atan2(dy, dx) / (2 * Math.PI), r = Math.hypot(dx / (spanx / 2 || 1), dy / (spany / 2 || 1)); return band(a + r * (1 + rint(1)) + phase); }   // xoáy ốc
+      if (mode === "checker") { const gx = Math.floor((nx + phase) * gk), gy = Math.floor((ny + phase) * gk); return (gx + gy) % 2 === 0 ? 0 : 1 + ((gx * 7 + gy) % Math.max(1, K - 1)); }   // caro pha
       if (mode === "quad") return (dx >= 0 ? 1 : 0) + (dy >= 0 ? 2 : 0);                            // 4 góc (đối xứng tâm)
-      if (mode === "pie") { let a = Math.atan2(dy, dx) + Math.PI; return Math.min(K - 1, Math.floor(a / (2 * Math.PI + 1e-9) * K)); }   // múi quạt
-      if (mode === "rings") { const r = Math.hypot(dx / (spanx / 2 || 1), dy / (spany / 2 || 1)); return Math.min(K - 1, Math.floor(r * K)); }   // đồng tâm
-      if (mode === "frames") return Math.min(K - 1, Math.floor(Math.max(Math.abs(dx) / (spanx / 2 || 1), Math.abs(dy) / (spany / 2 || 1)) * K));   // khung VUÔNG đồng tâm
-      if (mode === "grid") return Math.floor((x - minx) / spanx * gk) + gk * Math.floor((y - miny) / spany * gk);                                  // lưới ô (patchwork)
-      if (mode === "cornerFan") { const ang = Math.atan2(Math.abs(y - corner[1]), Math.abs(x - corner[0])); return Math.min(K - 1, Math.floor(ang / (Math.PI / 2 + 1e-9) * K)); }   // quạt từ 1 góc
-      if (mode === "chevron") return Math.min(K - 1, Math.floor((Math.abs(dx) + (y - miny)) / (spanx / 2 + spany) * K));   // dải chữ V
-      if (mode === "diagGrid") { const a = Math.min(gk - 1, Math.floor(((x - minx) + (y - miny)) / (spanx + spany) * gk)), b = Math.min(gk - 1, Math.floor(((x - minx) + (maxy - y)) / (spanx + spany) * gk)); return a + gk * b; }   // patchwork thoi 45°
-      if (mode === "radial") { const rr = Math.min(1, Math.floor(Math.hypot(dx / (spanx / 2 || 1), dy / (spany / 2 || 1)))); return rr * 4 + (dx >= 0 ? 1 : 0) + (dy >= 0 ? 2 : 0); }   // bia: vành × góc phần tư
-      if (mode === "arch") return Math.min(K - 1, Math.floor(Math.hypot((x - cx) / (spanx / 2 || 1), (y - maxy) / (spany || 1)) * K));   // vòng cung (cầu vồng)
+      if (mode === "pie") { let a = (Math.atan2(dy, dx) + Math.PI) / (2 * Math.PI); return band(a + phase); }   // múi quạt (pha xoay)
+      if (mode === "rings") { const r = Math.hypot(dx / (spanx / 2 || 1), dy / (spany / 2 || 1)); return Math.min(K - 1, band(r * 0.5 + phase * 0.15) ); }   // đồng tâm (ranh không đều)
+      if (mode === "frames") { const r = Math.max(Math.abs(dx) / (spanx / 2 || 1), Math.abs(dy) / (spany / 2 || 1)); return Math.min(K - 1, band(r * 0.5 + phase * 0.15)); }   // khung VUÔNG đồng tâm
+      if (mode === "grid") return Math.floor((nx + phase / gk) % 1 * gk) + gk * Math.floor((ny + phase / gk) % 1 * gk);   // lưới ô (patchwork, pha)
+      if (mode === "cornerFan") { const a2 = Math.atan2(Math.abs(y - corner[1]), Math.abs(x - corner[0])) / (Math.PI / 2 + 1e-9); return band(a2 + phase); }   // quạt từ 1 góc
+      if (mode === "chevron") return band((Math.abs(dx) / (spanx / 2 || 1) + ny) * 0.5 + phase);   // dải chữ V
+      if (mode === "diagGrid") { const a = Math.min(gk - 1, Math.floor(((nx + ny) / 2 + phase) % 1 * gk)), b = Math.min(gk - 1, Math.floor(((nx + (1 - ny)) / 2 + phase) % 1 * gk)); return a + gk * b; }   // patchwork thoi 45°
+      if (mode === "radial") { const rr = Math.min(1, Math.floor(Math.hypot(dx / (spanx / 2 || 1), dy / (spany / 2 || 1)) + phase * 0.3)); return rr * 4 + (dx >= 0 ? 1 : 0) + (dy >= 0 ? 2 : 0); }   // bia: vành × góc phần tư
+      if (mode === "arch") return Math.min(K - 1, band(Math.hypot((x - cx) / (spanx / 2 || 1), (y - maxy) / (spany || 1)) * 0.5 + phase * 0.15));   // vòng cung (cầu vồng)
       return (Math.abs(dx) * spany >= Math.abs(dy) * spanx) ? (dx >= 0 ? 0 : 1) : (dy >= 0 ? 2 : 3);   // xcross: 4 tam giác
     };
     const zm = Array.from({ length: H }, () => Array(W).fill(0));
@@ -2120,8 +2129,6 @@ self.onmessage = function (e) {
   $b("bDiffMin").addEventListener("input", () => { B.diffMin = clamp(+$b("bDiffMin").value, 0, 100); });
   $b("bDiffMax").addEventListener("input", () => { B.diffMax = clamp(+$b("bDiffMax").value, 0, 100); });
   $b("bFill").addEventListener("input", () => { B.fillTarget = clamp(+$b("bFill").value, 50, 100); $b("bFillVal").textContent = B.fillTarget; });
-  $b("bMinL").addEventListener("input", () => { B.minL = clamp(+$b("bMinL").value, 2, 99); });
-  $b("bMaxL").addEventListener("input", () => { B.maxL = clamp(+$b("bMaxL").value, 0, 9999); });
   $b("bCount").addEventListener("input", updateCurveInfo);
   $b("bGenerate").addEventListener("click", runBatch);
   $b("bCancel").addEventListener("click", () => { B.cancel = true; if (B.cancelParallel) B.cancelParallel(); });
@@ -2188,8 +2195,6 @@ self.onmessage = function (e) {
   B.scale = clamp(+$b("bScale").value, 40, 100) / 100;
   $b("bScaleVal").textContent = $b("bScale").value;
   B.fillTarget = clamp(+$b("bFill").value, 50, 100); $b("bFillVal").textContent = B.fillTarget;
-  B.minL = clamp(+$b("bMinL").value, 2, 99);
-  B.maxL = clamp(+$b("bMaxL").value, 0, 9999);
   B.diffMode = $b("bDiffMode").value;
   B.diffMin = clamp(+$b("bDiffMin").value, 0, 100); B.diffMax = clamp(+$b("bDiffMax").value, 0, 100);
   syncDiffMode();
@@ -2206,6 +2211,7 @@ self.onmessage = function (e) {
     window.__batch.autoFillHoles = autoFillHoles;  // lấp lỗ bị bao quanh (cũ, chỉ ô bao đủ 4 phía)
     window.__batch.smartFillHoles = smartFillHoles;    // LẤP LỖ THÔNG MINH (phân loại giữ/lấp + hốc biên) — dùng chung
     window.__batch.mergeFilledZones = mergeFilledZones; // gộp vùng ô đã lấp -> màu tiếp xúc nhiều nhất
+    window.__batch.cutZones = cutZones;                // chia vùng màu (pattern lát cắt) — expose để test độ đa dạng
     window.__batch.buildCoreSrc = buildCoreSrc;    // nguồn Worker ĐÃ KIỂM CHỨNG (genFull+deps) để dựng Worker riêng
   }
 })();

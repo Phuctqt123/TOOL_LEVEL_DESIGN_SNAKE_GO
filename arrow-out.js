@@ -242,6 +242,7 @@ function analyzeSolve(pieces, w, h) {
 // PACING TRONG MÀN: độ khó MỖI LƯỢT d(t)∈[0,1] (lượt siết/ép buộc = cao) + mô tả hình dạng
 // (Dồn đầu / Đỉnh giữa / Climax cuối / 2 đỉnh / Phẳng). Dùng để HIỂN THỊ pacing, không ảnh hưởng gen.
 function intraDifficulty(pieces, w, h) {
+  pieces = pieces.filter(p => !p.mother);   // KHÔNG tính rắn mẹ (viền ôm luôn thoát dễ, làm loãng đồ thị độ khó trong màn)
   const a = analyzeSolve(pieces, w, h), T = a.turnData.length;
   if (!T) return { d: [], T: 0, peak: 0, trend: 0, label: "—" };
   const d = a.turnData.map(td => {
@@ -672,13 +673,25 @@ function buildMother(pieces, w, h, count, hugRegion) {
       if (!path || path.length < 4) break;
       if (path.some(c => occ.has(c.x + "," + c.y))) break;   // an toàn (không xảy ra khi lòi ra = 0)
       let cells = null, dir = null;
-      // MỎ THOÁT: thêm ô NGAY TRÊN ô đầu (path[0] ở ngay trên đỉnh hình) -> đầu chĩa LÊN ra ngoài, thoát chắc.
-      const sx = path[0].x, sy = path[0].y - 1, sk = sx + "," + sy;
-      const inPath = (x, y) => path.some(c => c.x === x && c.y === y);
-      if (sy >= 0 && !block.has(sk) && !occ.has(sk) && !inPath(sx, sy)) {
-        let clear = true;
-        for (let yy = sy - 1; yy >= 0; yy--) { if (block.has(sx + "," + yy) || inPath(sx, yy)) { clear = false; break; } }
-        if (clear) { cells = [{ x: sx, y: sy }, ...path]; dir = "up"; }   // cổ = path[0] ngay dưới -> đầu thẳng lên
+      // MỎ THOÁT NGẪU NHIÊN: quét TOÀN BỘ viền tìm mọi vị trí có thể chĩa đầu ra rìa (4 hướng, ray thông),
+      // chọn NGẪU NHIÊN 1 -> mỗi rắn mẹ ra chỗ khác nhau (trước đây LUÔN ở đỉnh path[0] chĩa lên -> giống hệt nhau).
+      const pathSet = new Set(path.map(c => c.x + "," + c.y));
+      const inPath = (x, y) => pathSet.has(x + "," + y);
+      const DIRS4 = [{ k: "up", dx: 0, dy: -1 }, { k: "down", dx: 0, dy: 1 }, { k: "left", dx: -1, dy: 0 }, { k: "right", dx: 1, dy: 0 }];
+      const cand = [];
+      for (let pi = 0; pi < path.length; pi++) {
+        for (const dd of DIRS4) {
+          const ex = path[pi].x + dd.dx, ey = path[pi].y + dd.dy, ek = ex + "," + ey;   // ô cổ ngay ngoài viền theo hướng dd
+          if (ex < 0 || ey < 0 || ex >= w || ey >= h || block.has(ek) || occ.has(ek) || inPath(ex, ey)) continue;
+          let clear = true, rx = ex + dd.dx, ry = ey + dd.dy;   // tia từ đầu ra rìa phải THÔNG (không xuyên hình/mẹ/thân/ring)
+          while (rx >= 0 && ry >= 0 && rx < w && ry < h) { const rk = rx + "," + ry; if (block.has(rk) || occ.has(rk) || inPath(rx, ry)) { clear = false; break; } rx += dd.dx; ry += dd.dy; }
+          if (clear) cand.push({ pi, ex, ey, dir: dd.k });
+        }
+      }
+      if (cand.length) {   // xoay ring để bắt đầu từ ô viền được chọn -> đầu (ô cổ ngoài) + thân bám viền liền mạch
+        const pick = cand[rint(cand.length)];
+        const rot = path.slice(pick.pi).concat(path.slice(0, pick.pi));
+        cells = [{ x: pick.ex, y: pick.ey }, ...rot]; dir = pick.dir;
       }
       if (!cells) { const m = motherFromLoop(path, block, w, h); if (!m) break; cells = m.cells; dir = m.dir; }   // dự phòng: cắt vòng (ray theo block toàn cục)
       if (cells.some(c => occ.has(c.x + "," + c.y))) break;
@@ -743,6 +756,16 @@ function emitBoardPulse(color, kind) {
   if (!board) return;
   const { x, y } = cellCenter(Math.floor(state.W / 2), Math.floor(state.H / 2));
   spawnFxBurst(x - 4, y - 4, color || "#6fb3ff", kind || "burst");
+}
+// VA CHẠM (ý tưởng SG2): RUNG cả bàn + FLASH đỏ toàn màn khi rắn tông trúng (bị chặn) — phản hồi rõ ràng.
+function collisionFx() {
+  const outer = board && board.parentElement;   // .board-outer
+  if (outer) { outer.classList.remove("shake"); void outer.offsetWidth; outer.classList.add("shake"); setTimeout(() => outer.classList.remove("shake"), 380); }
+  const layer = ensureFxLayer();
+  let fl = layer.querySelector(".board-flash");
+  if (!fl) { fl = document.createElement("div"); fl.className = "board-flash"; layer.appendChild(fl); }
+  fl.classList.remove("on"); void fl.offsetWidth; fl.classList.add("on");
+  setTimeout(() => { if (fl) fl.classList.remove("on"); }, 280);
 }
 function celebrateWin() {
   if (!board) return;
@@ -975,7 +998,7 @@ function onPieceTap(id) {
   const hy = cellCenter(head.x, head.y).y;
   if (info.blocked) {
     bump(p, info.blockerId);
-    emitBoardPulse("#fb8074", "burst");
+    collisionFx();   // SG2: rung bàn + flash đỏ khi va trúng
     spawnFxBurst(hx - 4, hy - 4, "#fb8074", "burst");
     updateStatus();
   } else {
@@ -1391,8 +1414,10 @@ function testPlay() {
 function clamp(v, lo, hi) { v = isNaN(v) ? lo : v; return Math.max(lo, Math.min(hi, v)); }
 
 // Tính & hiển thị điểm độ khó cho 1 bộ rắn.
+// ĐỒNG BỘ với thư viện batch: dùng computeDifficulty1000 (span-weighted) — batch sinh + thư viện
+// hiển thị bằng công thức này, nên khi vào chơi phải hiện CÙNG số (trước đây dùng computeDifficulty gốc -> lệch).
 function refreshDifficulty(pieces, w, h) {
-  const d = computeDifficulty(pieces, w, h);
+  const d = (typeof computeDifficulty1000 === "function") ? computeDifficulty1000(pieces, w, h) : computeDifficulty(pieces, w, h);
   state.difficulty = d;
   const el = $("diffLabel");
   if (el) el.innerHTML = (!pieces.length || d.tier === "—")

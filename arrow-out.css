@@ -151,6 +151,13 @@ header.top h1 span { background:linear-gradient(120deg,var(--accent),var(--accen
 .fx-ripple { position:absolute; width:18px; height:18px; border:2px solid rgba(255,255,255,.8); border-radius:50%; pointer-events:none; animation:fxRipple .45s ease-out forwards; }
 @keyframes fxBurst { 0%{ opacity:1; transform:scale(.4) translate3d(0,0,0); } 100%{ opacity:0; transform:scale(2.3) translate3d(0,-12px,0); } }
 @keyframes fxRipple { 0%{ opacity:.8; transform:scale(.5); } 100%{ opacity:0; transform:scale(1.8); } }
+/* VA CHẠM kiểu SG2: rung bàn + flash đỏ toàn màn khi rắn tông trúng */
+.board-outer.shake { animation: boardShake .38s cubic-bezier(.36,.07,.19,.97); }
+@keyframes boardShake { 10%,90%{transform:translateX(-2px)} 20%,80%{transform:translateX(3px)} 30%,50%,70%{transform:translateX(-5px)} 40%,60%{transform:translateX(5px)} }
+.board-flash { position:absolute; inset:0; pointer-events:none; opacity:0; border-radius:14px;
+  background:radial-gradient(circle at center, rgba(251,110,94,.30), rgba(251,110,94,0) 70%); }
+.board-flash.on { animation: boardFlash .28s ease-out; }
+@keyframes boardFlash { 0%{opacity:0} 22%{opacity:1} 100%{opacity:0} }
 
 /* ---------- buttons ---------- */
 .controls { width:100%; display:flex; gap:8px; flex-wrap:wrap; justify-content:center; }
