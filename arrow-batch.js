@@ -1278,8 +1278,9 @@ self.onmessage = function (e) {
      Bản này lấp lỗ MỌI cỡ theo PHÂN LOẠI (đo 2882 level đối thủ: 89% có lỗ, đa số là hoạ tiết):
        GIỮ  lỗ TO (> holeMax ô, mặc định 3) = phần hình vẽ (mắt/lòng donut);
        GIỮ  lỗ có BẠN ĐỐI XỨNG (gương tâm lỗ qua trục hình, chặt ±0.5, + cổng >=50% lỗ nhỏ mới coi là hoa văn);
-       LẤP  lỗ nhỏ lẻ loi + HỐC BIÊN (ô lõm giáp mask >=3 cạnh: lõm 1 ô/rãnh cụt 1 ô; giữ chữ U/góc rộng).
-     opts: { holeMax (mặc định 3; 0 = lấp cả lỗ to), holeSym (mặc định true; false = bỏ luật đối xứng) }. */
+       LẤP  lỗ nhỏ lẻ loi (<=holeMax) + HỐC BIÊN: (a) LỖ BIÊN NHIỀU Ô (lõm block nối ra ngoài, trong bbox
+            hình, <=holeMax ô -> lấp; lõm to như chữ U giữ); (b) rãnh cụt/lõm 1 ô (giáp mask >=3 cạnh).
+     opts: { holeMax (mặc định 3; 0 = lấp cả lỗ to nhưng KHÔNG động lõm biên), holeSym (mặc định true) }. */
   function smartFillHoles(cells, W, H, opts) {
     const s = new Set(cells);
     const holeMax = Number.isFinite(opts && opts.holeMax) ? opts.holeMax : 3;
@@ -1328,7 +1329,31 @@ self.onmessage = function (e) {
       for (const hh of big) hh.cells.forEach(c => kept.add(c[0] + "," + c[1]));
       for (const hh of paired) hh.cells.forEach(c => kept.add(c[0] + "," + c[1]));
     }
-    // HỐC BIÊN: lặp tới ổn định — ô trống KHÔNG thuộc lỗ giữ, giáp mask >=3 cạnh -> lấp (lõm 1 ô/rãnh cụt).
+    // LỖ BIÊN NHIỀU Ô (concave bite): ô trống NỐI RA NGOÀI nhưng nằm TRONG bbox của hình = lõm ở rìa
+    // (block 2×2 / 1×3 sát mép như hình user). Nhóm 4-hướng trong (out ∩ bbox): nhóm NHỎ (<=edgeCap ô)
+    // -> LẤP; nhóm TO -> giữ (lõm chủ ý: chữ U/C/L, Pac-Man). edgeCap = holeMax, nhưng holeMax=0 ("lấp cả
+    // lỗ to") vẫn dùng cap 8 để KHÔNG nuốt lõm biên lớn (và giữ đơn điệu: holeMax=0 lấp >= holeMax nhỏ).
+    if (s.size) {
+      const edgeCap = holeMax > 0 ? holeMax : 8;
+      let bx0 = W, bx1 = -1, by0 = H, by1 = -1;
+      s.forEach(k => { const i = k.indexOf(","), x = +k.slice(0, i), y = +k.slice(i + 1); if (x < bx0) bx0 = x; if (x > bx1) bx1 = x; if (y < by0) by0 = y; if (y > by1) by1 = y; });
+      const eseen = new Set();
+      for (const ok of out) {
+        if (eseen.has(ok)) continue;
+        const i = ok.indexOf(","), ex = +ok.slice(0, i), ey = +ok.slice(i + 1);
+        if (ex < bx0 || ex > bx1 || ey < by0 || ey > by1) continue;   // ngoài bbox = nền/đệm -> bỏ
+        const comp = [ok]; eseen.add(ok); let head = 0;
+        while (head < comp.length) {
+          const ck = comp[head++]; const ci = ck.indexOf(","), cx = +ck.slice(0, ci), cy = +ck.slice(ci + 1);
+          for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+            const nx = cx + dx, ny = cy + dy; if (nx < bx0 || nx > bx1 || ny < by0 || ny > by1) continue;
+            const nk = nx + "," + ny; if (out.has(nk) && !eseen.has(nk)) { eseen.add(nk); comp.push(nk); }
+          }
+        }
+        if (comp.length <= edgeCap) for (const ck of comp) s.add(ck);   // lõm biên nhỏ -> lấp; lõm to giữ nguyên
+      }
+    }
+    // HỐC BIÊN 1 Ô: lặp tới ổn định — ô trống KHÔNG thuộc lỗ giữ, giáp mask >=3 cạnh -> lấp (lõm 1 ô/rãnh cụt).
     let changed = true;
     while (changed) {
       changed = false;
@@ -1385,7 +1410,7 @@ self.onmessage = function (e) {
     const origPaint = new Set(B.paint);
     const doFill = $b("bCloneFillHoles") && $b("bCloneFillHoles").checked;
     if (doFill) {
-      B.paint = smartFillHoles(B.paint, B.W, B.H, { holeMax: 3, holeSym: true });
+      B.paint = smartFillHoles(B.paint, B.W, B.H, { holeMax: 8, holeSym: true });   // batch: lấp mạnh hơn (lỗ nhiều ô + lõm biên), giữ lỗ to/đối xứng
       const added = new Set(); B.paint.forEach(k => { if (!origPaint.has(k)) added.add(k); });
       mergeFilledZones(cm, added, B.W, B.H);   // ô đã lấp -> màu vùng bên cạnh tiếp xúc nhiều nhất
     }
