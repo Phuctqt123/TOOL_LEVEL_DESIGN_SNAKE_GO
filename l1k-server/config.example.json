@@ -1,0 +1,6 @@
+{
+  "_comment": "COPY thành config.json (đã .gitignore) HOẶC để trống và gọi POST /api/provision để tự tạo. shareWithEmail = email Google của bạn để được cấp quyền writer vào Sheet/folder do service account tạo.",
+  "shareWithEmail": "product@skylinkstudio.com",
+  "folderId": "",
+  "sheetId": ""
+}

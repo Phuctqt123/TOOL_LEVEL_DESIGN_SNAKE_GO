@@ -1,0 +1,13 @@
+{
+  "name": "l1k-server",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Proxy server-side cho tab 1000 Levels (Google Drive + Sheets qua service account).",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "googleapis": "^144.0.0"
+  }
+}

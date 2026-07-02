@@ -1,0 +1,68 @@
+/* ===================== 1000 LEVELS · workflow đầy đủ ===================== */
+/* Tái dùng nhiều class .seq-* / .card / .fld / .chk / .row / .hint của các file cũ. */
+
+.l1k-wrap { display: flex; flex-direction: column; gap: 16px; position: relative; }
+#seqView .l1k-card { animation: none; }
+.l1k-h3 { font-size: 13px; font-weight: 800; margin: 0 0 6px; color: var(--text); }
+
+.l1k-cols { display: flex; gap: 16px; flex-wrap: wrap; }
+.l1k-col { flex: 1 1 280px; min-width: 260px; }
+
+/* dataset info */
+.l1k-dsinfo { display: flex; gap: 12px; flex-wrap: wrap; }
+.l1k-ds { flex: 1 1 240px; background: var(--panel2); border: 1px solid var(--line); border-radius: var(--radius-sm);
+  padding: 10px 12px; font-size: 13px; }
+.l1k-ds b { color: var(--text); font-size: 18px; }
+.l1k-ds-h { display: block; color: var(--muted); font-weight: 700; font-size: 11.5px; text-transform: uppercase; letter-spacing: .4px; margin-bottom: 2px; }
+
+/* presets */
+.l1k-prst { font-size: 12px; }
+
+/* link Sheet / Drive */
+.l1k-links { font-size: 13px; min-height: 18px; }
+.l1k-links a { color: var(--accent); text-decoration: none; font-weight: 700; }
+.l1k-links a:hover { text-decoration: underline; }
+
+/* versions */
+.l1k-vers { display: flex; flex-direction: column; gap: 8px; max-height: 320px; overflow: auto; }
+.l1k-ver { display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  background: var(--panel2); border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 8px 11px; }
+.l1k-ver-meta b { display: block; font-size: 13px; color: var(--text); }
+.l1k-ver-meta span { font-size: 11.5px; color: var(--muted); }
+.l1k-ver-act { display: flex; gap: 6px; flex: 0 0 auto; }
+.l1k-ver-act button { font-size: 12px; padding: 4px 9px; }
+
+/* sync dot */
+.l1k-dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; vertical-align: middle; background: var(--faint); }
+.l1k-dot.ok { background: var(--good); box-shadow: 0 0 0 3px color-mix(in srgb, var(--good) 25%, transparent); }
+.l1k-dot.off { background: var(--warn); }
+.l1k-dot.err { background: var(--danger); }
+
+/* kv list trong modal */
+.l1k-kv { display: grid; grid-template-columns: auto 1fr; gap: 4px 14px; font-size: 13px; align-items: baseline; }
+.l1k-kv span { color: var(--muted); }
+.l1k-kv b { color: var(--text); text-align: right; }
+
+/* ---------- TOASTS ---------- */
+.l1k-toasts { position: fixed; right: 16px; bottom: 16px; z-index: 9999; display: flex; flex-direction: column; gap: 8px; pointer-events: none; }
+.l1k-toast { pointer-events: auto; min-width: 200px; max-width: 360px; padding: 11px 14px; border-radius: 12px;
+  font-size: 13px; font-weight: 600; color: #fff; background: #2b3243; box-shadow: var(--shadow-lg);
+  transform: translateX(120%); opacity: 0; transition: transform .28s cubic-bezier(.2,.8,.2,1), opacity .28s; }
+.l1k-toast.show { transform: translateX(0); opacity: 1; }
+.l1k-toast.ok { background: linear-gradient(135deg, #1f9d6b, #13a673); }
+.l1k-toast.error { background: linear-gradient(135deg, #d23a55, #e34d6b); }
+.l1k-toast.info { background: linear-gradient(135deg, #3a6bd0, #4a7dff); }
+
+/* ---------- LOADING OVERLAY ---------- */
+.l1k-overlay { position: absolute; inset: 0; z-index: 50; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 14px; background: var(--overlay); backdrop-filter: blur(2px); border-radius: var(--radius); font-weight: 700; color: var(--text); }
+.l1k-spin { width: 38px; height: 38px; border-radius: 50%; border: 4px solid var(--line2); border-top-color: var(--accent); animation: l1kspin .8s linear infinite; }
+@keyframes l1kspin { to { transform: rotate(360deg); } }
+
+/* ---------- MODAL sửa độ khó ---------- */
+.l1k-modal { position: fixed; inset: 0; z-index: 9998; display: flex; align-items: center; justify-content: center;
+  background: rgba(8,12,22,.55); backdrop-filter: blur(3px); }
+.l1k-modal-card { width: min(420px, 92vw); background: var(--panel); border: 1px solid var(--line2);
+  border-radius: var(--radius); box-shadow: var(--shadow-lg); padding: 18px 20px; }
+.l1k-modal-card h3 { margin: 0 0 12px; font-size: 16px; }
+.l1k-modal-card .row button { padding: 8px 14px; }
