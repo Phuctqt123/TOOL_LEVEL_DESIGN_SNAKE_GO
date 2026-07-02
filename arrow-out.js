@@ -115,17 +115,10 @@ function svgEl(tag) { return document.createElementNS(SVGNS, tag); }
 // ---------- Geometry ----------
 function dims() { return state.mode === "edit" ? { w: state.editW, h: state.editH } : { w: state.W, h: state.H }; }
 function curPieces() { return state.mode === "edit" ? state.editPieces : state.pieces; }
-function computeCellSize(w, h) {
+function computeCellSize(w) {
   GAP = w > 30 ? 1 : w > 18 ? 2 : 5;
   const avail = Math.min(board.parentElement.clientWidth || 560, 820);
   CELL = Math.max(8, Math.min(70, Math.floor((avail - (w + 1) * GAP) / w)));
-  // GỌN 1 MÀN HÌNH: cap thêm theo CHIỀU CAO trống của viewport (trừ phần chrome phía trên board
-  // + chỗ cho controls/hint phía dưới ~150px) -> bàn to không tràn màn hình, khỏi cuộn khi chơi.
-  if (h) {
-    const topDoc = board.getBoundingClientRect().top + (window.scrollY || 0);
-    const availH = Math.max(260, (window.innerHeight || 800) - topDoc - 150);
-    CELL = Math.max(8, Math.min(CELL, Math.floor((availH - (h + 1) * GAP) / h)));
-  }
 }
 function cellPos(x, y) { return { left: GAP + x * (CELL + GAP), top: GAP + y * (CELL + GAP) }; }
 function cellCenter(x, y) { const p = cellPos(x, y); return { x: p.left + CELL / 2, y: p.top + CELL / 2 }; }
@@ -774,7 +767,7 @@ function celebrateWin() {
 }
 function renderStatic() {
   const { w, h } = dims();
-  computeCellSize(w, h);
+  computeCellSize(w);
   board.classList.toggle("play", state.mode === "play");
   board.style.width = (GAP + w * (CELL + GAP)) + "px";
   board.style.height = (GAP + h * (CELL + GAP)) + "px";
