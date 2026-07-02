@@ -1426,8 +1426,8 @@ self.onmessage = function (e) {
     floodZones(cm, B.paint, B.W, B.H);   // ô chưa màu còn lại (đệm trong / lỗ giữ) -> vùng gần nhất (BFS)
     B.cloneFilled = doFill;   // nhớ trạng thái để báo cáo
     B.layoutType = "paint"; $b("bLayoutType").value = "paint"; setLayoutType("paint");
-    // fill mặc định 97% + độ khó [0–100] (sao cũng được) + bỏ "Rắn mẹ"
-    B.fillTarget = 97; $b("bFill").value = 97; $b("bFillVal").textContent = "97";
+    // fill mặc định 100% (KÍN TUYỆT ĐỐI) + độ khó [0–100] (sao cũng được) + bỏ "Rắn mẹ"
+    B.fillTarget = 100; $b("bFill").value = 100; $b("bFillVal").textContent = "100";
     $b("bMother").checked = false;
     B.diffMode = "range"; $b("bDiffMode").value = "range";
     B.diffMin = 0; B.diffMax = 100; $b("bDiffMin").value = 0; $b("bDiffMax").value = 100; syncDiffMode();
