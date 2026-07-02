@@ -385,6 +385,40 @@ function computeDifficulty(pieces, w, h) {
   const [, tier, emoji] = DIFF_TIERS.find(t => score < t[0]);
   return { score, tier, emoji, regions: sep.regions, sepBonus: sep.bonus, breakdown: { snakeScore, moveScore, percScore, hiddenScore, xaScore } };
 }
+// BỘ TRỌNG SỐ "1000 LEVELS" — GLOBAL dùng chung: tab 1000 Levels + SG1 Sinh hàng loạt + SG2 (màn CHỈ CÓ RẮN).
+// Khác computeDifficulty gốc: perc 30->20, hidden 30->20, move giữ 20, xa giữ 10, XOÁ snakeScore,
+// THÊM spanScore 30% = độ "trải rộng" hộp bao TB/rắn ((Xmax-Xmin)+(Ymax-Ymin), bỏ mother) -> ưu tiên rắn dài/ngoằn ngoèo.
+// SPAN_REF nằm TRONG hàm để buildCoreSrc() serialize qua Worker vẫn tự chạy (không phụ thuộc const ngoài).
+function computeDifficulty1000(pieces, w, h) {
+  if (!pieces.length) return { score: 0, tier: "—", emoji: "" };
+  const SPAN_REF = 10;   // trải rộng TB (Xmax-Xmin)+(Ymax-Ymin) mỗi rắn = 10 ô -> đủ 100 điểm phần span
+  const a = analyzeSolve(pieces, w, h);
+  if (a.stuck > 0) return { score: 0, tier: "KẸT", emoji: "✕", stuck: a.stuck, breakdown: null };
+  const rates = a.turnData.map(d => d.rate);
+  const avgRate = rates.length ? rates.reduce((x, y) => x + y, 0) / rates.length : 0;
+  const moveRaw = Math.max(0, Math.min(100, (100 - avgRate) * 1.1));
+  const moveScore = Math.round(moveRaw * moveRaw / 100);
+  const sig = percDynamic(pieces, w, h);
+  const percScore = sig.perc, hiddenScore = sig.hidden, xaScore = sig.xa;
+  let spanSum = 0, nReal = 0;
+  for (const p of pieces) {
+    if (p.mother) continue;
+    nReal++;
+    let xmin = Infinity, xmax = -Infinity, ymin = Infinity, ymax = -Infinity;
+    for (const c of p.cells) {
+      const x = c.x != null ? c.x : c[0], y = c.y != null ? c.y : c[1];
+      if (x < xmin) xmin = x; if (x > xmax) xmax = x; if (y < ymin) ymin = y; if (y > ymax) ymax = y;
+    }
+    spanSum += (xmax - xmin) + (ymax - ymin);
+  }
+  const spanScore = nReal ? Math.max(0, Math.min(100, (spanSum / nReal) / SPAN_REF * 100)) : 0;
+  const raw = 0.20 * percScore + 0.20 * hiddenScore + 0.20 * moveScore + 0.10 * xaScore + 0.30 * spanScore;
+  const playable = 0.6 + 0.4 * (moveScore / 100);
+  const sep = regionSeparation(pieces, w, h);
+  const score = Math.min(100, Math.round(raw * playable) + sep.bonus);
+  const [, tier, emoji] = DIFF_TIERS.find(t => score < t[0]);
+  return { score, tier, emoji, regions: sep.regions, sepBonus: sep.bonus, spanSum, spanScore, breakdown: { spanScore, moveScore, percScore, hiddenScore, xaScore } };
+}
 
 // ---------- Generator ----------
 const MAXSNAKES = 220;   // trần số rắn mỗi map (giữ thời gian sinh trong tầm; ảnh cần nhiều để phủ đẹp)
@@ -685,6 +719,52 @@ function computeMask(img, W, H, th, harsh) {
 }
 
 // ---------- Render: grid ----------
+function ensureFxLayer() {
+  let layer = board.querySelector("#fxLayer");
+  if (!layer) {
+    layer = document.createElement("div");
+    layer.id = "fxLayer";
+    board.appendChild(layer);
+  }
+  return layer;
+}
+function spawnFxBurst(x, y, color, kind = "burst") {
+  const layer = ensureFxLayer();
+  const dot = document.createElement("div");
+  dot.className = kind === "ripple" ? "fx-ripple" : "fx-burst";
+  dot.style.left = `${x}px`;
+  dot.style.top = `${y}px`;
+  dot.style.background = color || "var(--accent)";
+  dot.style.borderColor = color || "var(--accent)";
+  layer.appendChild(dot);
+  setTimeout(() => dot.remove(), 450);
+}
+function emitBoardPulse(color, kind) {
+  if (!board) return;
+  const { x, y } = cellCenter(Math.floor(state.W / 2), Math.floor(state.H / 2));
+  spawnFxBurst(x - 4, y - 4, color || "#6fb3ff", kind || "burst");
+}
+function celebrateWin() {
+  if (!board) return;
+  board.classList.remove("win-glow");
+  void board.offsetWidth;
+  board.classList.add("win-glow");
+  const layer = ensureFxLayer();
+  const colors = ["#5b9dff", "#4fd08a", "#e0b84f", "#fb8074"];
+  for (let i = 0; i < 16; i++) {
+    const dot = document.createElement("div");
+    dot.className = "fx-burst";
+    const x = 20 + Math.random() * (parseFloat(board.style.width) - 40);
+    const y = 20 + Math.random() * (parseFloat(board.style.height) - 40);
+    dot.style.left = `${x}px`;
+    dot.style.top = `${y}px`;
+    dot.style.background = colors[i % colors.length];
+    dot.style.borderColor = colors[i % colors.length];
+    dot.style.animationDuration = `${380 + Math.random() * 120}ms`;
+    layer.appendChild(dot);
+    setTimeout(() => dot.remove(), 520);
+  }
+}
 function renderStatic() {
   const { w, h } = dims();
   computeCellSize(w);
@@ -866,6 +946,7 @@ function updateStatus() {
   if (state.mode === "play" && state.status === "win") {
     elMsg.className = "msg win";
     elMsg.textContent = state.moves <= state.par ? "✓ Hoàn hảo! Đúng par." : "✓ Xong! (vượt par)";
+    celebrateWin();
   } else if (state.mode === "play") { elMsg.className = "msg"; elMsg.textContent = ""; }
 }
 
@@ -884,17 +965,36 @@ function snapshot() { return { pieces: state.pieces.map(p => ({ id:p.id, dir:p.d
 function onPieceTap(id) {
   if (state.mode !== "play" || state.status !== "playing") return;
   const p = state.pieces.find(x => x.id === id); if (!p) return;
+  const refs = pieceEls.get(p.id);
+  if (refs && refs.g) { refs.g.classList.remove("active-piece"); void refs.g.getBBox(); refs.g.classList.add("active-piece"); }
   const info = pathInfo(p, state.pieces, state.W, state.H);
   state.history.push(snapshot());
   state.moves++;
-  if (info.blocked) { bump(p, info.blockerId); updateStatus(); }
-  else escapePiece(p);
+  const head = p.cells[0];
+  const hx = cellCenter(head.x, head.y).x;
+  const hy = cellCenter(head.x, head.y).y;
+  if (info.blocked) {
+    bump(p, info.blockerId);
+    emitBoardPulse("#fb8074", "burst");
+    spawnFxBurst(hx - 4, hy - 4, "#fb8074", "burst");
+    updateStatus();
+  } else {
+    emitBoardPulse("#4fd08a", "burst");
+    spawnFxBurst(hx - 4, hy - 4, "#4fd08a", "burst");
+    escapePiece(p);
+  }
 }
 
 function escapePiece(p) {
   const refs = pieceEls.get(p.id);
   state.pieces = state.pieces.filter(x => x.id !== p.id);
   pieceEls.delete(p.id);
+  // Glow trail ĐÚNG MÀU con rắn khi trườn ra (currentColor -> filter transition sẵn có ease-in mượt).
+  if (refs && refs.g) {
+    const strokeColor = refs.line && refs.line.getAttribute("stroke");
+    if (strokeColor) refs.g.style.color = strokeColor;
+    refs.g.classList.add("escaping");
+  }
 
   // Quỹ đạo: đuôi -> ... -> đầu -> kéo dài thẳng ra ngoài bàn.
   // Cả con rắn là một đoạn dài Lbody trượt dọc quỹ đạo này -> trườn mượt.
@@ -939,6 +1039,14 @@ function escapePiece(p) {
   const Lbody = totalLen - ext * spacing;   // chiều dài thân theo quỹ đạo mượt (đuôi -> đầu)
   const wpx = parseFloat(board.style.width), hpx = parseFloat(board.style.height);
   const speed = spacing / 78, accelT = 170, bodyStep = spacing / 6;   // rải dày 6 mẫu/ô
+  const FADE_SPAN = CELL * 1.5;   // khoảng cách sau biên để MỜ DẦN thay vì biến mất đột ngột
+  // khoảng cách đuôi đã vượt QUÁ mép bàn (mép + CELL) theo đúng hướng d (âm/0 = chưa vượt).
+  function edgeExcess(pt) {
+    if (d.x > 0) return pt.x - (wpx + CELL);
+    if (d.x < 0) return -CELL - pt.x;
+    if (d.y > 0) return pt.y - (hpx + CELL);
+    return -CELL - pt.y;
+  }
   let startT = null;
   function frame(ts) {
     if (startT === null) startT = ts;
@@ -954,7 +1062,12 @@ function escapePiece(p) {
       refs.tri.setAttribute("points", arrowTri(pts[0], d));
     }
     const tail = pts[pts.length - 1];
-    if (tail.x < -CELL || tail.x > wpx + CELL || tail.y < -CELL || tail.y > hpx + CELL) { if (refs && refs.g) refs.g.remove(); return; }
+    const excess = edgeExcess(tail);
+    if (excess > 0) {
+      const fadeT = Math.min(1, excess / FADE_SPAN);
+      if (refs && refs.g) refs.g.style.opacity = String(1 - fadeT);
+      if (fadeT >= 1) { if (refs && refs.g) refs.g.remove(); return; }
+    }
     requestAnimationFrame(frame);
   }
   requestAnimationFrame(frame);

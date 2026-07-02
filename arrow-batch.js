@@ -419,6 +419,15 @@
     const userMax = params ? +params.maxL || 0 : 0;
     const maxL = userMax >= 2 ? userMax : Math.max(6, Math.round(0.7 * (W + H)));   // Max Len người dùng; <2 = auto ~35% chu vi (không cap cứng)
     const fillTgt = (params && params.fill > 0) ? params.fill : 1;   // tỉ lệ phủ mục tiêu (1 = ép kín)
+    // OPT-IN (mặc định TẮT -> hành vi gốc y hệt, tab Sinh hàng loạt KHÔNG đổi): luôn thử ĐỘ DÀI TỐI ĐA
+    // trước ở mọi bước đặt rắn (thay vì phân phối ngẫu nhiên có trọng số); placeGuard() SẴN CÓ cơ chế
+    // rút ngắn dần (for L=body.length xuống lo) khi không đặt được -> đúng "dài trước, hết chỗ mới ngắn".
+    const longFirst = !!(params && params.longFirst);
+    // LÁI CHỦ ĐỘNG theo Ý ĐỒ TRỌNG SỐ (computeDifficulty1000: span 30% = rắn dài/trải rộng -> khó):
+    // lenBias 0..1 = mức thiên về rắn DÀI + THẲNG (span lớn). Mặc định suy từ target (target cao -> dài/thẳng,
+    // thấp -> ngắn/cuộn); genLevelCore truyền params.lenBias để TỰ CHỈNH giữa các vòng thử theo sai số đo được.
+    const lenBias = (params && params.lenBias != null) ? Math.max(0, Math.min(1, params.lenBias))
+      : ((target && target > 0) ? Math.max(0.05, Math.min(0.95, target / 100)) : null);
     const userMin = params ? +params.minL || 2 : 2;
     const straightBias = 0.88, lo = Math.max(2, Math.min(maxL, userMin));   // sàn độ dài ở pha đặt chính
     // RẮN GHIM (clone): pre-đặt nguyên trạng, giữ màu; engine chỉ fill các ô CÒN LẠI quanh chúng.
@@ -461,16 +470,27 @@
       else L = 10 + Math.floor(-Math.log(Math.max(1e-9, Math.random())) / 0.07);
       return Math.max(lo, Math.min(maxL, L));   // tôn trọng sàn minL & trần maxL
     }
-    function grow(sx, sy, primary, tlen) {   // boustrophedon: đi thẳng 5-7 ô rồi gấp
+    // Chọn độ dài ứng viên THEO Ý ĐỒ: longFirst = luôn max; lenBias cao -> thiên dài (span lớn = khó),
+    // thấp -> thiên ngắn (span nhỏ = dễ); không có ý đồ -> phân phối tự nhiên expLen (hành vi gốc).
+    function pickLen() {
+      if (longFirst) return maxL;
+      if (lenBias == null) return expLen();
+      const r = Math.random();
+      if (r < lenBias * 0.8) return Math.max(lo, Math.min(maxL, Math.round(maxL * (0.6 + 0.4 * Math.random()))));   // chủ động DÀI
+      if (r < lenBias * 0.8 + (1 - lenBias) * 0.5) return Math.max(lo, Math.min(maxL, lo + rint(3)));               // chủ động NGẮN
+      return expLen();
+    }
+    function grow(sx, sy, primary, tlen, allowSet) {   // boustrophedon: đi thẳng rồi gấp; allowSet = giới hạn trong vùng (sửa lỗ)
       const path = [{ x: sx, y: sy }]; board[sy][sx] = -9; let cur = { x: sx, y: sy }, d = primary, run = 0;
-      const turnAfter = 5 + (Math.random() * 3 | 0);
+      // Độ thẳng theo ý đồ span: bias cao -> chạy thẳng lâu (hộp bao rộng), thấp -> gấp sớm (cuộn gọn)
+      const turnAfter = lenBias == null ? 5 + (Math.random() * 3 | 0) : Math.max(2, Math.round(2 + lenBias * 8 + Math.random() * 2));
       while (path.length < tlen) {
         let perp = d.dx !== 0 ? [{ dx: 0, dy: 1 }, { dx: 0, dy: -1 }] : [{ dx: 1, dy: 0 }, { dx: -1, dy: 0 }];
         if (Math.random() < 0.5) perp = [perp[1], perp[0]];
         const force = run >= turnAfter;
         const cands = force ? perp.concat([d]) : (Math.random() < straightBias ? [d].concat(perp) : perp.concat([d]));
         let moved = false;
-        for (const dd of cands) { const nx = cur.x + dd.dx, ny = cur.y + dd.dy; if (nx >= 0 && nx < W && ny >= 0 && ny < H && board[ny][nx] === 0 && sameZone(nx, ny, sx, sy)) { run = (dd === d) ? run + 1 : 0; board[ny][nx] = -9; path.push({ x: nx, y: ny }); cur = { x: nx, y: ny }; d = dd; moved = true; break; } }
+        for (const dd of cands) { const nx = cur.x + dd.dx, ny = cur.y + dd.dy; if (nx >= 0 && nx < W && ny >= 0 && ny < H && board[ny][nx] === 0 && (allowSet ? allowSet.has(nx + "," + ny) : sameZone(nx, ny, sx, sy))) { run = (dd === d) ? run + 1 : 0; board[ny][nx] = -9; path.push({ x: nx, y: ny }); cur = { x: nx, y: ny }; d = dd; moved = true; break; } }
         if (!moved) break;
       }
       path.forEach(c => board[c.y][c.x] = 0);
@@ -584,8 +604,9 @@
     }
 
     // PHASE 1: rắn dài trước (sort giảm dần), 40% đầu bám viền (edge-first)
+    // longFirst: mọi ứng viên = maxL (không phân phối ngẫu nhiên) -> LUÔN thử dài nhất trước tiên.
     const nTarget = Math.round(W * H / 8), targets = [];
-    for (let i = 0; i < nTarget; i++) targets.push(expLen());
+    for (let i = 0; i < nTarget; i++) targets.push(pickLen());   // độ dài theo ý đồ trọng số (longFirst/lenBias/tự nhiên)
     targets.sort((a, b) => b - a);
     const skip = new Set();
     for (let ti = 0; ti < targets.length; ti++) {
@@ -604,13 +625,21 @@
       const body = grow(seed.x, seed.y, primary, targets[ti]);
       if (body.length < 2 || !placeGuard(body, Math.random() < tightBias)) skip.add(seed.x + "," + seed.y);
     }
-    // PHASE 2: lấp khe bằng rắn ngắn
+    // PHASE 2: lấp khe — mặc định ưu tiên rắn NGẮN (khe còn lại thường nhỏ/lẻ);
+    // longFirst: VẪN thử maxL trước ở đây luôn -> placeGuard tự rút ngắn dần nếu khe không đủ chỗ.
+    // NHẮM FILL: khi còn ít ô trống, ưu tiên seed ở ô "KẸT" (ít lân cận trống nhất) -> lấp túi/góc khó
+    // TRƯỚC khi hết đường, tránh tự tạo lỗ mồ côi rồi mới đi vá.
     let guard = 0; const maxGuard = W * H * 3;
     while (guard++ < maxGuard) {
       if (curFill() >= fillTgt) break;
       const empties = allEmpty().filter(c => !skip.has(c.x + "," + c.y));
       if (!empties.length) break;
-      const seed = empties[0], tlen = Math.max(lo, Math.min(maxL, lo + rint(4)));
+      let seed = empties[0];
+      if (empties.length <= 60) {
+        let bestN = 9;
+        for (const c of empties) { let n = 0; for (const d of DIRN) if (free(c.x + d.dx, c.y + d.dy)) n++; if (n >= 1 && n < bestN) { bestN = n; seed = c; if (n === 1) break; } }
+      }
+      const tlen = longFirst ? maxL : (lenBias != null ? pickLen() : Math.max(lo, Math.min(maxL, lo + rint(4))));
       const body = grow(seed.x, seed.y, DIRN[rint(4)], tlen);
       if (body.length < 2 || !placeGuard(body, Math.random() < tightBias)) skip.add(seed.x + "," + seed.y);
     }
@@ -633,17 +662,92 @@
       }
     }
     if (fillTgt >= 0.95) absorbEmpty();   // chỉ vét tối đa khi fill cao; fill thấp giữ độ thưa
-    if (fillTgt >= 0.999) {   // VÉT 100%: nới ràng buộc VÙNG cho vài ô bướng cuối -> ra map KÍN nhanh hơn (giữ solvable)
-      let chg = true, ps = 0;
-      while (chg && ps++ < 6) {
-        chg = false; const empties = allEmpty(); if (!empties.length) break;
-        for (const e of empties) {
-          if (board[e.y][e.x] !== 0) continue;
-          let ok = false;
-          for (const s of snakes) { const tl = s.cells[s.cells.length - 1]; if (Math.abs(tl.x - e.x) + Math.abs(tl.y - e.y) === 1) { s.cells.push({ x: e.x, y: e.y }); board[e.y][e.x] = s.id; if (isSolvable()) { ok = true; break; } s.cells.pop(); board[e.y][e.x] = 0; } }   // nối ĐUÔI (mọi vùng)
-          if (ok) { chg = true; continue; }
-          for (const s of snakes) { const hd = s.cells[0]; if (Math.abs(hd.x - e.x) + Math.abs(hd.y - e.y) === 1) { s.cells.unshift({ x: e.x, y: e.y }); const o = s.dir; s.dir = dirOf(s.cells); board[e.y][e.x] = s.id; if (s.dir && isSolvable()) { chg = true; break; } s.cells.shift(); s.dir = o; board[e.y][e.x] = 0; } }   // nối ĐẦU (mọi vùng)
+    if (fillTgt >= 0.999) {   // FILL 100% TUYỆT ĐỐI: mọi ô mask PHẢI có rắn — sửa lỗ CHỦ ĐỘNG theo cụm, leo thang 3 nấc
+      // Nấc 1: nối ĐUÔI/ĐẦU rắn kề vào ô trống (thử cùng vùng màu trước, nới vùng sau).
+      // Nấc 2: cụm trống >=2 ô -> mọc RẮN MỚI gói trong cụm (placeGuard tự rút ngắn, phần dư vòng sau xử tiếp).
+      // Nấc 3: "gỡ & mọc lại" — nhấc 1 rắn kề cụm ra, gộp thân nó + cụm thành 1 vùng rồi lấp lại toàn vùng
+      //         bằng rắn mới; không kín/không solvable -> hoàn tác nguyên trạng, thử rắn kề khác.
+      const emptyClusters = () => {   // gom ô trống thành cụm 4-hướng, cụm NHỎ xử trước (khó lấp nhất)
+        const em = allEmpty(), emp = new Set(em.map(c => c.x + "," + c.y)), seen = new Set(), out = [];
+        for (const c of em) {
+          const k0 = c.x + "," + c.y; if (seen.has(k0)) continue;
+          const q = [c], cl = []; seen.add(k0);
+          while (q.length) { const u = q.pop(); cl.push(u); for (const d of DIRN) { const nk = (u.x + d.dx) + "," + (u.y + d.dy); if (emp.has(nk) && !seen.has(nk)) { seen.add(nk); q.push({ x: u.x + d.dx, y: u.y + d.dy }); } } }
+          out.push(cl);
         }
+        return out.sort((a, b) => a.length - b.length);
+      };
+      const extendInto = (e, anyZone) => {   // nối 1 ô vào đuôi rồi đầu rắn kề (giữ solvable)
+        if (board[e.y][e.x] !== 0) return true;
+        for (const s of snakes) { if (s.mother) continue; const tl = s.cells[s.cells.length - 1];
+          if (Math.abs(tl.x - e.x) + Math.abs(tl.y - e.y) === 1 && (anyZone || sameZone(e.x, e.y, tl.x, tl.y))) { s.cells.push({ x: e.x, y: e.y }); board[e.y][e.x] = s.id; if (isSolvable()) return true; s.cells.pop(); board[e.y][e.x] = 0; } }
+        for (const s of snakes) { if (s.mother) continue; const hd = s.cells[0];
+          if (Math.abs(hd.x - e.x) + Math.abs(hd.y - e.y) === 1 && (anyZone || sameZone(e.x, e.y, hd.x, hd.y))) { s.cells.unshift({ x: e.x, y: e.y }); const o = s.dir; s.dir = dirOf(s.cells); board[e.y][e.x] = s.id; if (s.dir && isSolvable()) return true; s.cells.shift(); s.dir = o; board[e.y][e.x] = 0; } }
+        return false;
+      };
+      const fillRegion = region => {   // lấp 1 vùng (Set "x,y") bằng rắn mới; trả mảng rắn đã thêm (không kín -> caller tự xét)
+        const added = []; let g2 = 0;
+        while (g2++ < 60) {
+          const rest = []; region.forEach(k => { const i2 = k.indexOf(","), x = +k.slice(0, i2), y = +k.slice(i2 + 1); if (board[y][x] === 0) rest.push({ x, y }); });
+          if (!rest.length) break;
+          let placed = false;
+          for (const st of shuffle(rest.slice()).slice(0, 8)) {
+            for (const d of shuffle(DIRN.slice())) {
+              const body = grow(st.x, st.y, d, Math.max(2, rest.length), region);
+              if (body.length >= 2 && placeGuard(body, false)) { added.push(snakes[snakes.length - 1]); placed = true; break; }
+            }
+            if (placed) break;
+          }
+          if (!placed) break;
+        }
+        return added;
+      };
+      const removeSnakes = list => { for (const ns of list) { const i2 = snakes.indexOf(ns); if (i2 >= 0) snakes.splice(i2, 1); for (const c of ns.cells) board[c.y][c.x] = 0; } };
+      const trySteal = (cl, group) => {   // gỡ nhóm rắn 'group', gộp thân + cụm thành 1 vùng, lấp lại KÍN (3 lượt xáo); hỏng -> hoàn tác
+        const region = new Set(cl.map(c => c.x + "," + c.y));
+        for (const s of group) { if (snakes.indexOf(s) < 0) return false; for (const c of s.cells) region.add(c.x + "," + c.y); }
+        for (const s of group) { snakes.splice(snakes.indexOf(s), 1); for (const c of s.cells) board[c.y][c.x] = 0; }
+        for (let att = 0; att < 3; att++) {
+          const added = fillRegion(region);
+          let remain = false; region.forEach(k => { const i2 = k.indexOf(","), x = +k.slice(0, i2), y = +k.slice(i2 + 1); if (board[y][x] === 0) remain = true; });
+          if (!remain && isSolvable()) return true;
+          removeSnakes(added);   // lượt này không kín/không solvable -> gỡ rắn mới, xáo lại
+        }
+        for (const s of group) { for (const c of s.cells) board[c.y][c.x] = s.id; snakes.push(s); }   // hoàn tác nguyên trạng
+        return false;
+      };
+      const stealRegrow = cl => {   // nấc 3: hy sinh 1 rắn kề (rồi leo thang CẶP 2 rắn) để chia lại vùng quanh lỗ
+        const inCl = new Set(cl.map(c => c.x + "," + c.y));
+        const adj = [];
+        for (const s of snakes) {
+          if (s.mother || s.bait || s.trap || s.fixedColor >= 1) continue;   // không đụng rắn ghim/mồi/mẹ
+          let touch = false;
+          for (const c of s.cells) { for (const d of DIRN) if (inCl.has((c.x + d.dx) + "," + (c.y + d.dy))) { touch = true; break; } if (touch) break; }
+          if (touch) adj.push(s);
+        }
+        shuffle(adj);
+        for (const s of adj.slice(0, 6)) if (trySteal(cl, [s])) return true;
+        const K = Math.min(adj.length, 5);   // cặp 2 rắn kề: vùng gộp to hơn -> nhiều cách chia lại hơn hẳn
+        for (let i = 0; i < K; i++) for (let j = i + 1; j < K; j++) if (trySteal(cl, [adj[i], adj[j]])) return true;
+        return false;
+      };
+      let round = 0;
+      while (round++ < 12) {
+        const cls = emptyClusters(); if (!cls.length) break;
+        let progress = false;
+        for (const cl of cls) {
+          if (cl.some(c => board[c.y][c.x] !== 0)) { progress = true; continue; }   // vòng trước đã đụng vào cụm này -> gom lại vòng sau
+          if (cl.length >= 2) {   // nấc 2 trước: rắn mới nằm gọn trong cụm
+            const inCl = new Set(cl.map(c => c.x + "," + c.y));
+            const added = fillRegion(inCl);
+            if (added.length) { progress = true; continue; }
+          }
+          let any = false;
+          for (const e of cl) if (board[e.y][e.x] === 0 && (extendInto(e, false) || extendInto(e, true))) any = true;   // nấc 1
+          if (any) { progress = true; continue; }
+          if (stealRegrow(cl)) progress = true;   // nấc 3
+        }
+        if (!progress) break;
       }
     }
     // BẪY: đảo con GIỮA hàng mồi -> quay VÔ; chỉ giữ nếu đầu mới BỊ CHẶN (click = va chạm) & bàn vẫn giải được.
@@ -666,11 +770,13 @@
   }
 
   // ---------- Sinh 1 level theo target (pure — dùng cả ở main thread & worker) ----------
-  // genFull cho board GIẢI ĐƯỢC theo fill mục tiêu; nhận map khớp fill (±3%, =100 ép kín) & độ khó đúng.
-  // Thử vài cách xếp, trả map hợp lệ có độ khó GẦN target nhất. Trả null nếu không ra map nào.
+  // genFull cho board GIẢI ĐƯỢC theo fill mục tiêu; fill=100 -> PHẢI KÍN TUYỆT ĐỐI (0 ô trống), khác -> ±3%.
+  // Độ khó đo bằng computeDifficulty1000 (trọng số tab 1000 Levels: span 30%). Vòng thử LÁI CHỦ ĐỘNG:
+  // đo xong lệch target thì chỉnh lenBias (thiên dài/ngắn) cho lần kế — không chỉ sinh random rồi lọc.
   function genLevelCore(W, H, mask, target, params) {
-    const MAX = 4, fullArea = mask ? mask.size : W * H;
+    const fullArea = mask ? mask.size : W * H;
     const wantFill = Math.round((params && params.fill > 0 ? params.fill : 1) * 100);   // % fill mục tiêu
+    const MAX = wantFill >= 100 ? 6 : 4;   // ép kín tuyệt đối khó đạt hơn -> thêm lượt thử
     if (params && params.perLevelZones && typeof cutZones === "function") {   // MỖI LEVEL: chia vùng màu riêng
       const cells = new Set();
       if (mask) mask.forEach(k => cells.add(k)); else for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) cells.add(x + "," + y);
@@ -679,24 +785,32 @@
       params = Object.assign({}, params, { zoneMap: zm || null });   // confine gen + tô màu (đính kèm level)
     }
     let bestArr = null, bestDd = Infinity;
+    // lenBias khởi từ target (span 30%: target cao = rắn dài/thẳng); mỗi vòng đo lệch -> đẩy bias ngược chiều lệch.
+    let lenBias = (params && params.lenBias != null) ? params.lenBias : (target ? Math.max(0.05, Math.min(0.95, target / 100)) : null);
     for (let r = 0; r < MAX; r++) {
-      const arr = genFull(W, H, mask, params, target);   // target -> ép siết tỉ lệ theo độ khó muốn (bẫy thao tác: layout tự nhiên, bẫy xử lý ở onAccept)
+      const p2 = lenBias != null ? Object.assign({}, params, { lenBias }) : params;
+      const arr = genFull(W, H, mask, p2, target);   // target -> ép siết tỉ lệ theo độ khó muốn (bẫy thao tác: layout tự nhiên, bẫy xử lý ở onAccept)
       if (!arr || arr.length < 2) continue;
       let cov = 0; for (const p of arr) cov += p.cells.length;   // rắn chỉ nằm trong mask -> cov = ô đã phủ
       const fillReal = fullArea ? Math.round(cov / fullArea * 100) : 0;
-      if (wantFill >= 100 ? fillReal < 97 : Math.abs(fillReal - wantFill) > 3) continue;   // fill=100 -> nhận 97–100% (nhanh hơn nhiều); khác -> ±3%
-      const pre = computeDifficulty(arr, W, H);
+      if (wantFill >= 100 ? cov !== fullArea : Math.abs(fillReal - wantFill) > 3) continue;   // fill=100 -> KÍN TUYỆT ĐỐI (không còn nhận 97–99%); khác -> ±3%
+      const pre = computeDifficulty1000(arr, W, H);   // trọng số 1000 Levels (span 30%) — thống nhất với tab 1000 Levels
       if (pre.tier === "KẸT") continue;   // genFull đảm bảo solvable nên gần như không xảy ra
       const dd = target ? Math.abs(pre.score - target) : 0;
       if (dd < bestDd) { bestDd = dd; bestArr = arr; }
       if (dd === 0) break;   // đã đúng điểm -> lấy luôn
+      if (target && lenBias != null) {   // lái chủ động: thấp hơn target -> thiên dài/thẳng hơn (span tăng), cao hơn -> ngược lại
+        const err = pre.score - target;
+        if (err <= -3) lenBias = Math.min(0.95, lenBias + 0.18);
+        else if (err >= 3) lenBias = Math.max(0.05, lenBias - 0.18);
+      }
     }
     if (!bestArr) return null;
     const arr = bestArr;
     let mothers = [];
     if (params.mother) { mothers = buildMother(arr, W, H, 1, mask ? Array.from(mask) : null); if (mothers.length && !solve(arr.concat(mothers), W, H).solvable) mothers = []; }
     const all = arr.concat(mothers);
-    const d = computeDifficulty(all, W, H);
+    const d = computeDifficulty1000(all, W, H);   // điểm hiển thị/slot cũng theo trọng số 1000 Levels
     if (d.tier === "KẸT") return null;
     const a = analyzeSolve(all, W, H);
     // ĐỈNH-KHÓ-TRONG-MÀN: ép khoảnh khắc khó nhất (chấm đỏ sparkline) rơi vào vùng muốn -> loại nếu lệch.
@@ -741,10 +855,12 @@ self.onmessage = function (e) {
   }
 };`;
 
-  function buildWorkerURL() {
-    if (B.workerURL) return B.workerURL;
+  // Nguồn "lõi" (mọi hàm pure cần cho genFull/genLevelCore chạy trong Worker) — TÁCH RIÊNG khỏi
+  // WORKER_MAIN để nơi khác (vd tab 1000 Levels) dựng Worker RIÊNG với logic nhận việc khác,
+  // mà vẫn dùng ĐÚNG bộ closure đã kiểm chứng chạy đúng ở đây (khỏi lặp lại rủi ro thiếu hàm phụ thuộc).
+  function buildCoreSrc() {
     const fns = [clamp, inBoard, solve, depMetrics, movableList, analyzeSolve, percRisk, percDynamic,
-      regionSeparation, intraDifficulty, computeDifficulty, rint, shuffle, growSnake, snakeLen, generateMap, coverageCount, autoGenerate,
+      regionSeparation, intraDifficulty, computeDifficulty, computeDifficulty1000, rint, shuffle, growSnake, snakeLen, generateMap, coverageCount, autoGenerate,
       traceBorder, motherFromLoop, connectedComponents, buildMother, dirFromTo, spatialZones, normalizeZones, cutZones, genFull, genLevelCore];
     let src = '"use strict";\n';
     src += "var DIRS=" + JSON.stringify(DIRS) + ";\n";
@@ -752,8 +868,11 @@ self.onmessage = function (e) {
     src += "var MAXSNAKES=" + MAXSNAKES + ";\n";
     src += "var DIFF_TIERS=" + JSON.stringify(DIFF_TIERS) + ";\n";
     for (const f of fns) src += f.toString() + "\n";
-    src += WORKER_MAIN;
-    B.workerURL = URL.createObjectURL(new Blob([src], { type: "application/javascript" }));
+    return src;
+  }
+  function buildWorkerURL() {
+    if (B.workerURL) return B.workerURL;
+    B.workerURL = URL.createObjectURL(new Blob([buildCoreSrc() + WORKER_MAIN], { type: "application/javascript" }));
     return B.workerURL;
   }
   function workerCount() {   // dùng HẾT số nhân CPU (bỏ trần 8) — vượt số nhân không nhanh hơn vì CPU-bound
@@ -1635,8 +1754,8 @@ self.onmessage = function (e) {
       if (!w || !h || !pieces.length) continue;
       if (pieces.some(p => typeof p.fixedColor === "number" && p.fixedColor >= 1)) sawColor = true;   // file có màu cố định
       const live = normPieces(pieces).map((p, i) => (p.id = i + 1, p));   // gán id để solve/analyzeSolve chạy đúng
-      // tính LẠI mọi thông số từ chính các con rắn (y như lúc tự sinh) — bỏ qua metadata sẵn có
-      const d = computeDifficulty(live, w, h);
+      // tính LẠI mọi thông số từ chính các con rắn (y như lúc tự sinh) — trọng số 1000 Levels (thống nhất toàn tab)
+      const d = computeDifficulty1000(live, w, h);
       const a = analyzeSolve(live, w, h);
       const area = w * h;
       let covered = 0; for (const p of live) covered += p.cells.length;
@@ -1936,4 +2055,14 @@ self.onmessage = function (e) {
   setLayoutType("rect");
   updateCurveInfo();
   state.mode = "batch"; syncModeUI(); renderLibrary();   // mặc định hiện chế độ Hàng loạt
+
+  // ---- Xuất engine clone-màu cho tab 1000 Levels dùng LẠI Y HỆT (giữ closure cutZones/spatialZones…) ----
+  if (typeof window !== "undefined") {
+    window.__batch = window.__batch || {};
+    window.__batch.genLevelCore = genLevelCore;   // sinh 1 level theo target + zone confinement (VÙNG NGẦM)
+    window.__batch.genFull = genFull;              // engine đặt rắn thô (1 lần/gọi) — nhanh hơn genLevelCore (4 lần)
+    window.__batch.floodZones = floodZones;        // lấp ô chưa màu -> vùng màu gần nhất
+    window.__batch.autoFillHoles = autoFillHoles;  // lấp lỗ bị bao quanh
+    window.__batch.buildCoreSrc = buildCoreSrc;    // nguồn Worker ĐÃ KIỂM CHỨNG (genFull+deps) để dựng Worker riêng
+  }
 })();

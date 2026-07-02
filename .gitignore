@@ -13,3 +13,19 @@ arrowout-pack-*.json
 # Tài liệu/tool tham khảo của teammate (không push tài sản người khác lên GitHub)
 _teammate/
 files.zip
+
+# ===== l1k-server: KHÔNG BAO GIỜ commit secrets / runtime state =====
+l1k-server/credentials.json
+l1k-server/config.json
+l1k-server/token.json
+l1k-server/node_modules/
+node_modules/
+# OAuth client config (chứa client_secret) — client_id đã nhúng trong code, file này không cần commit
+/credentials.json
+
+# Data đối thủ (110MB — quá giới hạn 100MB của GitHub) + file tách nhỏ + đồ test local
+point_out_levels.json
+point_out_split/
+scratch/
+.vscode/
+CLAUDE_PROMPT_1000_LEVELS.txt

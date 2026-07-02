@@ -3,12 +3,8 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-<title>Snake Go</title>
+<title>Snake Go — Sinh hàng loạt</title>
 <link rel="stylesheet" href="arrow-out.css" />
-<link rel="stylesheet" href="snakego2.css" />
-<link rel="stylesheet" href="compare.css" />
-<link rel="stylesheet" href="sequence.css" />
-<link rel="stylesheet" href="l1k/l1k.css" />
 <script>
 /* Đặt theme SỚM (tránh nháy nền) + lưu lựa chọn. Mặc định: light (nền trắng). */
 (function () {
@@ -31,7 +27,7 @@
   <header class="top">
     <div>
       <h1>Snake <span>Go</span></h1>
-      <div class="sub">Công cụ sinh hàng loạt level — mũi tên dạng rắn nhiều ô</div>
+      <div class="sub">Sinh hàng loạt level — mũi tên dạng rắn nhiều ô</div>
     </div>
     <div class="theme-switch" id="themeSwitch" title="Đổi nền/giao diện">
       <button type="button" data-theme="light" title="Nền trắng">☀️</button>
@@ -41,12 +37,10 @@
     </div>
   </header>
 
-  <nav class="tabs" id="tabs">
+  <!-- Trang riêng "Sinh hàng loạt": KHÔNG có thanh tab. Nút tabBatch giữ ẨN vì script cần nó để
+       vào chế độ batch (auto-click lúc load) & quay lại từ chế độ chơi (nút ← Thư viện tự xử). -->
+  <nav class="tabs" id="tabs" style="display:none">
     <button type="button" class="tab" id="tabBatch">🎲 Sinh hàng loạt</button>
-    <button type="button" class="tab" id="tabPlay">🎮 Chơi</button>
-    <button type="button" class="tab" id="tabSG2">✨ Snake Go 2</button>
-    <button type="button" class="tab" id="tabCompare">🔍 So sánh</button>
-    <button type="button" class="tab" id="tabSeq">📈 1000 Levels</button>
   </nav>
 
   <div class="board-area">
@@ -190,7 +184,7 @@
       <div class="card">
         <h2><span class="step-no">3</span> Tham số sinh</h2>
         <div class="row" style="margin-top:4px">
-          <label class="fld" style="flex:1" title="Tỉ lệ ô vùng chơi bị rắn phủ. 100 = gần kín (nhận 97–100% → sinh NHANH hơn nhiều); thấp hơn = thưa hơn (map dễ hơn). Nhận khi fill thực trong ±3% mục tiêu.">Độ lấp đầy (fill): <b id="bFillVal">100</b>%
+          <label class="fld" style="flex:1" title="Tỉ lệ ô vùng chơi bị rắn phủ. 100 = KÍN TUYỆT ĐỐI (mọi ô đều có rắn, không lỗ); thấp hơn = thưa hơn (map dễ hơn). Nhận khi fill thực trong ±3% mục tiêu.">Độ lấp đầy (fill): <b id="bFillVal">100</b>%
             <input type="range" id="bFill" min="50" max="100" value="100" /></label>
         </div>
         <div class="row" style="margin-top:4px; align-items:flex-end">
@@ -275,28 +269,15 @@
       </div>
     </div>
   </div>
-
-  <!-- ============ SNAKE GO 2 (sáng tạo + vật phẩm) — file tách riêng ============ -->
-  <div id="sg2View" style="display:none"></div>
-
-  <!-- ============ SO SÁNH 2 BỘ LEVEL — file tách riêng ============ -->
-  <div id="compareView" style="display:none"></div>
-
-  <!-- ============ CHUỖI 1000 LEVEL THEO ĐƯỜNG CONG — file tách riêng ============ -->
-  <div id="seqView" style="display:none"></div>
 </div>
 
 <script src="arrow-out.js"></script>
 <script src="arrow-batch.js"></script>
-<script src="snakego2.js"></script>
-<script src="compare.js"></script>
-<!-- ===== 1000 Levels: workflow đầy đủ (thay cho sequence.js) — module rõ ràng ===== -->
-<script src="l1k/store.js"></script>
-<script src="l1k/google-client.js"></script>
-<script src="l1k/sync.js"></script>
-<script src="l1k/sheet.js"></script>
-<script src="l1k/gen.js"></script>
-<script src="l1k/chart.js"></script>
-<script src="l1k/ui.js"></script>
+<script>
+// Trang riêng: vào thẳng chế độ Sinh hàng loạt (tab ẩn — không có thanh tab trên trang này).
+// Chơi thử level: bấm ▶ trên thẻ trong Thư viện -> vào màn chơi, nút "← Thư viện" để quay lại.
+// Click sau DOMContentLoaded để chắc chắn mọi listener (kể cả loại gắn trễ) đã sẵn sàng.
+document.addEventListener("DOMContentLoaded", function () { document.getElementById("tabBatch").click(); });
+</script>
 </body>
 </html>

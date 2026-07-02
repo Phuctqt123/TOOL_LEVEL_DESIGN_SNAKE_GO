@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+<title>Snake Go 2</title>
+<link rel="stylesheet" href="arrow-out.css" />
+<link rel="stylesheet" href="snakego2.css" />
+<script>
+/* Đặt theme SỚM (tránh nháy nền) + lưu lựa chọn. Mặc định: light (nền trắng). */
+(function () {
+  try { document.documentElement.setAttribute("data-theme", localStorage.getItem("sg-theme") || "light"); }
+  catch (e) { document.documentElement.setAttribute("data-theme", "light"); }
+  document.addEventListener("DOMContentLoaded", function () {
+    var sw = document.getElementById("themeSwitch"); if (!sw) return;
+    function mark() { var cur = document.documentElement.getAttribute("data-theme");
+      sw.querySelectorAll("button").forEach(function (b) { b.classList.toggle("active", b.dataset.theme === cur); }); }
+    sw.addEventListener("click", function (e) { var b = e.target.closest("button[data-theme]"); if (!b) return;
+      document.documentElement.setAttribute("data-theme", b.dataset.theme);
+      try { localStorage.setItem("sg-theme", b.dataset.theme); } catch (er) {} mark(); });
+    mark();
+  });
+})();
+</script>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div>
+      <h1>Snake <span>Go 2</span></h1>
+      <div class="sub">Sáng tạo level + vật phẩm (Linked · Corner · WoodenBox · BlackHole · Pipe · Elevator)</div>
+    </div>
+    <div class="theme-switch" id="themeSwitch" title="Đổi nền/giao diện">
+      <button type="button" data-theme="light" title="Nền trắng">☀️</button>
+      <button type="button" data-theme="cream" title="Nền kem">🍦</button>
+      <button type="button" data-theme="dark" title="Nền tối">🌙</button>
+      <button type="button" data-theme="navy" title="Xanh đêm">🌌</button>
+    </div>
+  </header>
+
+  <!-- Trang riêng SG2: KHÔNG có thanh tab. Nút tabSG2 giữ ẨN vì snakego2.js cần nó để init/mount
+       (auto-click lúc load). SG2 có modal chơi thử riêng (▶ trên thẻ level) — không cần tab chơi. -->
+  <nav class="tabs" id="tabs" style="display:none">
+    <button type="button" class="tab" id="tabSG2">✨ Snake Go 2</button>
+  </nav>
+
+  <!-- Khung chơi của arrow-out.js (engine nền SG2 tái dùng): giữ trong DOM để script gắn listener
+       không lỗi; enterSG2 sẽ ẨN toàn bộ ngay khi vào. -->
+  <div class="board-area">
+    <div class="statusbar">
+      <div class="pill">Level <b id="levelLabel">1</b></div>
+      <div class="pill">Nước đi <b id="moveCount">0</b> / <span id="parCount">—</span> par</div>
+      <div class="pill">Còn lại <b id="leftCount">0</b></div>
+      <div class="pill" title="Điểm độ khó 0–100">Khó <b id="diffLabel">—</b></div>
+      <div class="msg" id="msg"></div>
+    </div>
+
+    <div class="controls" id="libPlayBar" style="display:none;">
+      <button id="libBackBtn">← Thư viện</button>
+      <button id="libPrevBtn">◀ Trước</button>
+      <span class="pill" id="libPlayLabel" style="align-self:center"></span>
+      <button id="libNextBtn">Sau ▶</button>
+    </div>
+
+    <div class="board-outer"><div id="board"></div></div>
+
+    <div class="controls" id="playControls">
+      <button id="hintBtn">💡 Gợi ý</button>
+      <button id="undoBtn">↶ Hoàn tác</button>
+      <button id="resetBtn">⟲ Chơi lại</button>
+    </div>
+    <div class="hint" id="playHint"></div>
+  </div>
+
+  <div class="side">
+    <div class="card">
+      <h2><span class="h2-icon">📖</span> Luật chơi</h2>
+      <ul class="rules-list">
+        <li>Bấm con rắn → đầu đi thẳng ra rìa, thân trườn theo.</li>
+        <li>Thoát được khi tia đầu <b>không vướng</b> rắn khác / thân mình.</li>
+        <li>Dọn sạch tất cả với <b>ít nước nhất</b> — bí quyết là đúng thứ tự.</li>
+        <li>Bị chặn vẫn tính 1 nước đi.</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- ============ SNAKE GO 2 (sáng tạo + vật phẩm) — UI tự mount từ snakego2.js ============ -->
+  <div id="sg2View" style="display:none"></div>
+</div>
+
+<script src="arrow-out.js"></script>
+<script src="snakego2.js"></script>
+<script>
+// Trang riêng: vào thẳng Snake Go 2 (tab ẩn). Chơi thử = nút ▶ trên thẻ level (modal riêng của SG2).
+// snakego2.js gắn listener tab trong DOMContentLoaded -> phải click SAU đó (handler đăng ký sau chạy sau).
+document.addEventListener("DOMContentLoaded", function () { document.getElementById("tabSG2").click(); });
+</script>
+</body>
+</html>

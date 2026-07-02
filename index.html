@@ -2,12 +2,40 @@
 <html lang="vi">
 <head>
 <meta charset="UTF-8" />
-<meta http-equiv="refresh" content="0; url=arrow-out.html" />
-<link rel="canonical" href="arrow-out.html" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Snake Go — Tool Level Design</title>
+<style>
+  :root { color-scheme: light; }
+  body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; background: #f7f7fb; color: #1c2030;
+         display: flex; min-height: 100vh; align-items: center; justify-content: center; margin: 0; }
+  .box { text-align: center; padding: 40px 24px; }
+  h1 { margin: 0 0 6px; font-size: 34px; } h1 span { color: #4f7cff; }
+  .sub { color: #6a7185; margin-bottom: 28px; }
+  .links { display: flex; gap: 16px; justify-content: center; flex-wrap: wrap; }
+  a.card { display: block; width: 240px; padding: 22px 18px; background: #fff; border: 1px solid #e3e6ef;
+           border-radius: 14px; text-decoration: none; color: inherit; box-shadow: 0 2px 10px rgba(30,40,90,.06);
+           transition: transform .12s, box-shadow .12s; }
+  a.card:hover { transform: translateY(-3px); box-shadow: 0 8px 22px rgba(30,40,90,.12); }
+  a.card .icon { font-size: 34px; } a.card h2 { margin: 10px 0 6px; font-size: 18px; }
+  a.card p { margin: 0; font-size: 13px; color: #6a7185; }
+</style>
 </head>
 <body>
-<p>Đang mở công cụ… nếu không tự chuyển, bấm <a href="arrow-out.html">vào đây</a>.</p>
-<script>location.replace("arrow-out.html");</script>
+<div class="box">
+  <h1>Snake <span>Go</span></h1>
+  <div class="sub">Bộ công cụ thiết kế level</div>
+  <div class="links">
+    <a class="card" href="batch.html">
+      <div class="icon">🎲</div>
+      <h2>Sinh hàng loạt</h2>
+      <p>Sinh level theo layout + đường cong độ khó, thư viện, export ZIP, chơi thử.</p>
+    </a>
+    <a class="card" href="sg2.html">
+      <div class="icon">✨</div>
+      <h2>Snake Go 2</h2>
+      <p>Sáng tạo level + vật phẩm (Linked, WoodenBox, BlackHole, Pipe, Elevator…), chơi thử.</p>
+    </a>
+  </div>
+</div>
 </body>
 </html>

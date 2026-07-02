@@ -175,7 +175,11 @@
     const els = Array.isArray(elevators) ? elevators : (elevators ? [elevators] : []);
     const N = snakes.length; if (!N) return { score: 0, tier: "—", emoji: "" };
     const pieces = snakes.map((s, i) => ({ id: i + 1, dir: s.dir, cells: s.cells.map(c => ({ ...c })) }));
-    let base = 0; if (typeof computeDifficulty === "function") { const d = computeDifficulty(pieces, W, H); if (d && typeof d.score === "number") base = d.score; }
+    // MÀN CHỈ CÓ RẮN (không item/elevator/linked): đo bằng trọng số tab 1000 Levels (computeDifficulty1000,
+    // span 30%) để thống nhất thang điểm với SG1 Sinh hàng loạt + 1000 Levels. Có vật phẩm -> giữ công thức gốc.
+    const snakeOnly = !els.length && !items.wb.length && !items.bh.length && !items.corner.length && !items.pipe.length && !(items.obs || []).length && !snakes.some(s => s.link != null || s.ev);
+    const dfn = (snakeOnly && typeof computeDifficulty1000 === "function") ? computeDifficulty1000 : (typeof computeDifficulty === "function" ? computeDifficulty : null);
+    let base = 0; if (dfn) { const d = dfn(pieces, W, H); if (d && typeof d.score === "number") base = d.score; }
     const evTerm = els.reduce((a, e) => a + clamp(6 + e.layers.length * 5, 0, 28), 0);
     let score = clamp(Math.round(base + itemWeight(snakes, items, N) + evTerm), 0, 100);
     const trap = els.reduce((a, e) => a + elevatorTrapCount(snakes, items, W, H, e, els), 0);
@@ -1169,9 +1173,10 @@
       else if (ob.Type === 2) items.bh.push({ x, y });
     });
     let d = null;
-    if (!items.wb.length && !items.bh.length && typeof computeDifficulty === "function") {
+    const aoDfn = (typeof computeDifficulty1000 === "function") ? computeDifficulty1000 : (typeof computeDifficulty === "function" ? computeDifficulty : null);   // chỉ có rắn -> trọng số 1000 Levels
+    if (!items.wb.length && !items.bh.length && aoDfn) {
       try {
-        d = computeDifficulty(snakes.map((s, i) => ({ id: i + 1, dir: s.dir, cells: s.cells.map(c => ({ ...c })) })), w, h);
+        d = aoDfn(snakes.map((s, i) => ({ id: i + 1, dir: s.dir, cells: s.cells.map(c => ({ ...c })) })), w, h);
       } catch (e) {}
     }
     const name = o._name || (o.LevelId != null ? "level_" + o.LevelId : null);   // giữ TÊN level gốc (vd "level_1")
