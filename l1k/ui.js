@@ -279,10 +279,11 @@
       }
     });
 
-    // ghi kết quả vào GAME TA theo khoảng ourFrom.. — gen.js giờ LẤY TARGET GẦN NHẤT (fill vẫn cứng):
-    // mọi board ĐẠT FILL đều được ghi (không loại vì lệch target). r.exactMiss = lệch quá "Sai số"
-    // (best-effort, board không với tới target). null = KHÔNG đạt fill trong "tries" lần thử.
-    let written = 0, sumErr = 0, maxErr = 0, cnt = 0, offTol = 0;
+    // ghi kết quả vào GAME TA theo khoảng ourFrom.. — gen.js giờ BEST-EFFORT CẢ target LẪN fill:
+    // mọi board hợp lệ (solvable) đều được ghi. r.exactMiss = lệch quá "Sai số" (board không với tới target);
+    // r.fillMiss = không đạt "Fill tối thiểu" -> lấy bản FILL CAO NHẤT (fillReal%). null = KHÔNG sinh
+    // được board hợp lệ nào trong "tries" lần (rất hiếm) -> game ta giữ nguyên cũ tại vị trí đó.
+    let written = 0, sumErr = 0, maxErr = 0, cnt = 0, offTol = 0, fillMiss = 0, minFill = 100;
     for (let k = 0; k < res.results.length; k++) {
       const r = res.results[k]; if (!r) continue;
       const lvNo = ourFrom + k, idx = lvNo - 1;
@@ -292,6 +293,7 @@
       L1K.Store.M.ours.levels[idx] = game; oursArr[idx] = r.score; written++;
       ST.pendingRegen.delete(lvNo);   // đã gen trong đợt này -> gỡ khỏi danh sách chờ
       if (typeof r.target === "number") { const e = Math.abs(r.score - r.target); sumErr += e; maxErr = Math.max(maxErr, e); cnt++; if (r.exactMiss) offTol++; }
+      if (r.fillMiss) { fillMiss++; if (typeof r.fillReal === "number") minFill = Math.min(minFill, r.fillReal); }
     }
     L1K.Store.M.ours.count = L1K.Store.M.ours.levels.filter(Boolean).length;
     L1K.Store.M.ours.updatedAt = Date.now();
@@ -303,16 +305,17 @@
     ST.busy = false; ST.cancel = false;
     $("l1kGenBtn").disabled = false; $("l1kGenCancel").style.display = "none";
     $("l1kGenBar").style.width = "100%";
-    const failed = ourN - written;   // KHÔNG đạt FILL trong "tries" lần thử — game ta GIỮ NGUYÊN nội dung cũ tại các vị trí này
+    const failed = ourN - written;   // KHÔNG sinh được board hợp lệ (rất hiếm) — game ta GIỮ NGUYÊN nội dung cũ
     const mae = cnt ? (sumErr / cnt).toFixed(1) : "—";
-    const inTol = cnt - offTol;   // số level ĐÚNG trong sai số ±tol; offTol = best-effort (lấy gần nhất)
+    const inTol = cnt - offTol;   // số level ĐÚNG trong sai số ±tol; offTol = best-effort (lấy target gần nhất)
     startInfo.textContent = `✓ Xong: ghi ${written}/${ourN} level (game ta ${ourFrom}-${ourTo})`
       + (cnt ? ` · MAE ${mae} · lệch max ${maxErr} · ${inTol} trong sai số ±${tol}${offTol ? `, ${offTol} lấy TARGET GẦN NHẤT (board không với tới target)` : ""}` : " (clone thuần, không target)")
-      + (failed > 0 ? ` · ⚠ ${failed} level KHÔNG đạt fill trong ${genOpts.tries} lần thử — game ta GIỮ NGUYÊN nội dung cũ tại các level này` : "")
+      + (fillMiss > 0 ? ` · ${fillMiss} level lấy FILL GẦN NHẤT (thấp nhất ${minFill}%, không đạt "Fill tối thiểu")` : "")
+      + (failed > 0 ? ` · ⚠ ${failed} level KHÔNG sinh được board hợp lệ (giữ nguyên cũ)` : "")
       + (noTarget ? ` · ${noTarget} level thiếu target (bám đối thủ)` : "")
       + (res.skipped ? ` · bỏ ${res.skipped} layout > cap` : "")
       + ` · bấm "Đẩy game ta" để lưu Drive`;
-    toast(failed > 0 ? `Gen xong · ghi ${written}/${ourN} (${failed} KHÔNG đạt fill, giữ nguyên cũ — tăng "Số lần thử")` : (offTol ? `Đã gen ${written} level (${offTol} lấy target gần nhất) ✓` : `Đã gen ${written} level đúng target ✓`), failed > 0 ? "info" : "ok");
+    toast(failed > 0 ? `Gen xong · ghi ${written}/${ourN} (${failed} không sinh được — giữ nguyên cũ)` : (fillMiss ? `Đã gen ${written} level (${fillMiss} lấy fill gần nhất) ✓` : (offTol ? `Đã gen ${written} level (${offTol} lấy target gần nhất) ✓` : `Đã gen ${written} level ✓`)), failed > 0 ? "info" : "ok");
     refreshChartAll(); renderDatasets(); renderVersions(); renderSheetInfo();
   }
 

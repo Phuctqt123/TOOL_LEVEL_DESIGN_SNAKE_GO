@@ -200,89 +200,10 @@
      (VÙNG NGẦM: mỗi rắn chỉ nằm trong 1 vùng màu -> không lấn vùng khác) bám target; cuối cùng
      tô màu theo vùng gốc (giữ NGUYÊN màu). Đây là "chia vùng giữ nguyên, màu vùng siết chặt".  */
   function batchEngine() { return (typeof window !== "undefined" && window.__batch) ? window.__batch : null; }
-  /* ===== LẤP LỖ THÔNG MINH (thay autoFillHoles cũ trong pipeline clone) =====
-     autoFillHoles cũ chỉ lấp ô bị bao ĐỦ 4 PHÍA -> lỗ >=2 ô không bao giờ được lấp (lấp KHÔNG ĐỦ),
-     đồng thời lấp MỌI lỗ 1 ô kể cả chấm hoa văn (lấp VÔ TỘI VẠ). Bản mới lấp được lỗ MỌI cỡ
-     nhưng PHÂN LOẠI trước (đã đo trên 2882 level đối thủ: 89% level có lỗ, đa số là hoạ tiết):
-       GIỮ  — lỗ TO (> holeMax ô, mặc định 3): là phần của hình vẽ (mắt, lòng donut...)
-       GIỮ  — lỗ có BẠN ĐỐI XỨNG (ảnh gương tâm lỗ qua trục dọc/ngang/tâm của bbox HÌNH trùng
-              1 lỗ khác cùng cỡ ±1 ô): hoa văn trang trí đối xứng
-       LẤP  — lỗ nhỏ, lẻ loi, không đối xứng: nhiễu/bug silhouette
-     + LẤP HỐC BIÊN (edge notch): ô trống Ở BIÊN NGOÀI (không phải lỗ kín) nhưng lõm 1 ô vào hình
-       — giáp mask >=3 cạnh (lõm đơn / rãnh cụt rộng 1 ô) -> lấp. Giữ nguyên góc lõm rộng, chữ U,
-       Pac-Man (mở >1 ô -> ô chỉ giáp <=2 cạnh -> KHÔNG lấp). Tích hợp thẳng, không tham số riêng.
-     opts: { holeMax (mặc định 3; 0 = lấp cả lỗ to), holeSym (mặc định true; false = bỏ luật đối xứng) } */
-  function smartFillHoles(cells, W, H, opts) {
-    const s = new Set(cells);
-    const holeMax = Number.isFinite(opts && opts.holeMax) ? opts.holeMax : 3;
-    const symKeep = !(opts && opts.holeSym === false);
-    // flood từ rìa bàn qua ô ngoài mask -> vùng "ngoài"; ô ngoài mask KHÔNG tới được = lỗ kín
-    const out = new Set(); const q = [];
-    const push = (x, y) => { if (x < 0 || y < 0 || x >= W || y >= H) return; const k = x + "," + y; if (s.has(k) || out.has(k)) return; out.add(k); q.push([x, y]); };
-    for (let x = 0; x < W; x++) { push(x, 0); push(x, H - 1); }
-    for (let y = 0; y < H; y++) { push(0, y); push(W - 1, y); }
-    while (q.length) { const [x, y] = q.pop(); push(x + 1, y); push(x - 1, y); push(x, y + 1); push(x, y - 1); }
-    // gom lỗ kín thành cụm 4-hướng
-    const seen = new Set(), holes = [];
-    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
-      const k0 = x + "," + y; if (s.has(k0) || out.has(k0) || seen.has(k0)) continue;
-      const comp = [[x, y]]; seen.add(k0); let head = 0;
-      while (head < comp.length) {
-        const [cx, cy] = comp[head++];
-        for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
-          const nx = cx + dx, ny = cy + dy, nk = nx + "," + ny;
-          if (nx < 0 || ny < 0 || nx >= W || ny >= H || s.has(nk) || out.has(nk) || seen.has(nk)) continue;
-          seen.add(nk); comp.push([nx, ny]);
-        }
-      }
-      let sx = 0, sy = 0; comp.forEach(c => { sx += c[0]; sy += c[1]; });
-      holes.push({ cells: comp, size: comp.length, cx: sx / comp.length, cy: sy / comp.length });
-    }
-    // kept = ô của các lỗ kín ĐƯỢC GIỮ (lỗ to / đối xứng) -> pass hốc biên KHÔNG được đụng vào
-    const kept = new Set();
-    if (holes.length) {
-      // trục đối xứng tính theo bbox của HÌNH (mask), không theo bàn
-      let x0 = W, x1 = 0, y0 = H, y1 = 0;
-      s.forEach(k => { const i = k.indexOf(","), x = +k.slice(0, i), y = +k.slice(i + 1); if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; });
-      const mx = (x0 + x1) / 2, my = (y0 + y1) / 2;
-      // ĐỐI XỨNG CHẶT (±0.5 ô — đo thật: dung sai ±1 ghép NHẦM hàng loạt vì level trung vị có 14 lỗ)
-      // + CỔNG TOÀN CỤC: chỉ coi lỗ đối xứng là HOA VĂN khi >=50% lỗ nhỏ của level có bạn gương
-      // (đo 2856 level: hoa văn thật đạt >=50%, chấm rải tình cờ chỉ 0-30% -> ghép lẻ tẻ = lấp hết).
-      const TOL = 0.51;
-      const near = (a, b) => Math.abs(a.cx - b.cx) <= TOL && Math.abs(a.cy - b.cy) <= TOL;
-      const big = holes.filter(hh => holeMax > 0 && hh.size > holeMax);       // lỗ to -> giữ
-      const small = holes.filter(hh => !(holeMax > 0 && hh.size > holeMax));
-      let paired = new Set();
-      if (symKeep && small.length >= 2) {
-        for (const hh of small) {
-          const mirrors = [{ cx: 2 * mx - hh.cx, cy: hh.cy }, { cx: hh.cx, cy: 2 * my - hh.cy }, { cx: 2 * mx - hh.cx, cy: 2 * my - hh.cy }];
-          for (const m of mirrors) {
-            if (Math.abs(m.cx - hh.cx) <= TOL && Math.abs(m.cy - hh.cy) <= TOL) continue;   // gương trùng chính nó (nằm trên trục) -> không tính
-            if (small.some(o2 => o2 !== hh && o2.size === hh.size && near(o2, m))) { paired.add(hh); break; }
-          }
-        }
-        if (paired.size / small.length < 0.5) paired = new Set();   // ghép lẻ tẻ = tình cờ, không phải hoa văn -> lấp hết
-      }
-      for (const hh of small) if (!paired.has(hh)) hh.cells.forEach(c => s.add(c[0] + "," + c[1]));   // lỗ nhỏ lẻ -> lấp
-      for (const hh of big) hh.cells.forEach(c => kept.add(c[0] + "," + c[1]));                        // lỗ to giữ -> bảo vệ
-      for (const hh of paired) hh.cells.forEach(c => kept.add(c[0] + "," + c[1]));                     // đối xứng giữ -> bảo vệ
-    }
-    // LẤP HỐC BIÊN: lặp tới ổn định — ô trống trong-bàn, KHÔNG thuộc lỗ giữ, giáp mask >=3 cạnh -> lấp.
-    // Chỉ tóm lõm 1 ô + rãnh cụt rộng 1 ô (biên lõm), KHÔNG lan ra ngoài (ô lồi chỉ giáp <=1 cạnh)
-    // cũng KHÔNG phá lõm rộng/chữ U (mở >1 ô -> giáp <=2 cạnh).
-    let changed = true;
-    while (changed) {
-      changed = false;
-      for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
-        const k = x + "," + y; if (s.has(k) || kept.has(k)) continue;
-        let n = 0;
-        if (s.has((x + 1) + "," + y)) n++; if (s.has((x - 1) + "," + y)) n++;
-        if (s.has(x + "," + (y + 1))) n++; if (s.has(x + "," + (y - 1))) n++;
-        if (n >= 3) { s.add(k); changed = true; }
-      }
-    }
-    return s;
-  }
+  /* ===== LẤP LỖ THÔNG MINH — nguồn ĐÃ CHUYỂN sang arrow-batch.js (window.__batch), dùng CHUNG với
+     tab Sinh hàng loạt. gen.js chỉ delegate (tránh 2 bản trôi nhau). Cùng với mergeFilledZones
+     (gộp vùng ô đã lấp -> màu tiếp xúc nhiều nhất). Fallback new Set(cells) nếu thiếu batch (không xảy ra). */
+  function smartFillHoles(cells, W, H, opts) { const B = batchEngine(); return (B && typeof B.smartFillHoles === "function") ? B.smartFillHoles(cells, W, H, opts) : new Set(cells); }
   function buildPaddedCloneMap(raw) {
     if (typeof fromGameLevel !== "function") return null;
     let g; try { g = fromGameLevel(raw); } catch (e) { return null; }
@@ -301,8 +222,14 @@
     const B = batchEngine(); if (!B) return null;
     const built = buildPaddedCloneMap(raw); if (!built || built.mask.size < 4) return null;
     const { W, H, cm, colored } = built; let mask = built.mask;
+    const orig = new Set(mask);
     try { mask = smartFillHoles(mask, W, H, opts); } catch (e) {}
-    if (colored && typeof B.floodZones === "function") { try { B.floodZones(cm, mask, W, H); } catch (e) {} }
+    if (colored) {
+      // Ô MỚI LẤP -> gộp vào vùng màu TIẾP XÚC NHIỀU NHẤT (mergeFilledZones), rồi floodZones lấp ô còn -1.
+      const added = new Set(); mask.forEach(k => { if (!orig.has(k)) added.add(k); });
+      if (typeof B.mergeFilledZones === "function") { try { B.mergeFilledZones(cm, added, W, H); } catch (e) {} }
+      if (typeof B.floodZones === "function") { try { B.floodZones(cm, mask, W, H); } catch (e) {} }
+    }
     return { W, H, mask, cm, colored };
   }
   // Dùng genLevelCore của batch (zone confinement) + tô màu theo vùng gốc. Trả result hoặc null.
@@ -325,35 +252,43 @@
     // vùng cho vài ô bướng cuối, dễ làm lem màu vùng. Nới fill còn giúp GIỮ VÙNG SẠCH HƠN.
     const fillMin = clamp(Number.isFinite(opts && opts.fillMin) ? opts.fillMin : 0.98, 0.5, 1);
     const longFirst = !(opts && opts.longFirst === false);   // mặc định BẬT (can thiệp chọn độ dài)
-    let best = null, bestScore = 0, bestTier = "", bestErr = 1e9;
+    const strictFill = !!(opts && opts.strictFill);   // mặc định FALSE: LẤY FILL GẦN NHẤT (không loại vì thiếu fill)
+    // best = bản ĐẠT fillMin, GẦN target nhất | fb = FALLBACK fill CAO NHẤT khi chưa đạt fillMin (fill bằng -> target gần hơn)
+    let best = null, bestScore = 0, bestTier = "", bestErr = 1e9, bestFill = 0;
+    let fb = null, fbScore = 0, fbTier = "", fbErr = 1e9, fbFill = -1;
     for (let k = 0; k < tries; k++) {
-      let pieces, score, tier;
+      let pieces, score, tier, fillR;
       if (useGenFull) {
         let arr; try { arr = B.genFull(W, H, mask, { fill: fillMin, minL: 2, maxL: 0, zoneMap, pinned: null, trap: false, longFirst }, (typeof target === "number" ? target : 0)); } catch (e) { continue; }
         if (!arr || arr.length < 2) continue;
-        let cov = 0; for (const p of arr) cov += p.cells.length;
-        if (cov / mask.size < fillMin) continue;   // chưa đạt fillMin -> bỏ, thử lại
         const d = computeDifficulty1000(arr, W, H); if (!d || d.tier === "KẸT" || !d.score) continue;
-        pieces = arr; score = d.score; tier = d.tier;
-      } else {   // fallback: genLevelCore + lọc theo fillMin (dùng empty===0 nếu fillMin=1, else so diện tích)
+        let cov = 0; for (const p of arr) cov += p.cells.length;
+        pieces = arr; score = d.score; tier = d.tier; fillR = cov / mask.size;
+      } else {   // fallback engine: genLevelCore
         let lvl; try { lvl = B.genLevelCore(W, H, mask, (typeof target === "number" ? target : 0), { diff: 50, mother: false, perLevelZones: false, fill: fillMin, minL: 2, maxL: 0, zoneMap, pinned: null, trap: false, longFirst }); } catch (e) { continue; }
         if (!lvl || !lvl.pieces || lvl.pieces.length < 2) continue;
-        const covF = 1 - ((lvl.empty || 0) / mask.size); if (covF < fillMin) continue;
-        pieces = lvl.pieces; score = lvl.score; tier = lvl.tier;
+        pieces = lvl.pieces; score = lvl.score; tier = lvl.tier; fillR = 1 - ((lvl.empty || 0) / mask.size);
       }
       const err = (typeof target === "number") ? Math.abs(score - target) : 0;
-      if (err < bestErr) { bestErr = err; best = pieces; bestScore = score; bestTier = tier; if (err <= tol) break; }
+      if (fillR >= fillMin) {   // ĐẠT fill -> ứng viên CHÍNH, chọn theo target gần nhất
+        if (err < bestErr) { bestErr = err; best = pieces; bestScore = score; bestTier = tier; bestFill = fillR; if (err <= tol) break; }
+      } else if (fillR > fbFill || (fillR === fbFill && err < fbErr)) {   // CHƯA đạt fill -> giữ bản fill CAO NHẤT (dự phòng)
+        fbFill = fillR; fbErr = err; fb = pieces; fbScore = score; fbTier = tier;
+      }
     }
-    if (!best) return null;   // KHÔNG ra được board ĐẠT FILL -> bỏ level (fill vẫn là ràng buộc cứng, UI báo)
-    // LẤY TARGET GẦN NHẤT (mặc định): fill là sàn cứng, nhưng độ khó lấy bản GẦN target nhất trong
-    // "tries" lần thử — KHÔNG loại dù lệch quá "Sai số" (diện tích board quyết định sàn độ khó nên
-    // nhiều level KHÔNG THỂ chạm target; loại đi để trống 90%+ slot còn tệ hơn lệch vài điểm).
-    // "Sai số" giờ chỉ dùng để ĐÁNH DẤU exactMiss (báo cáo/tô màu), không còn ngăn ghi.
-    // strictTarget=true -> khôi phục hành vi loại-hẳn cũ (không có UI, chỉ là đường quay lại).
-    if (opts && opts.strictTarget && typeof target === "number" && bestErr > tol) return null;
+    // Ưu tiên bản ĐẠT fill (gần target nhất). KHÔNG có -> LẤY FILL GẦN NHẤT (fb) thay vì loại level (mặc định
+    // mới theo yêu cầu user: thà board hơi thiếu fill còn hơn để trống slot). strictFill=true -> loại như cũ.
+    // Cả target lẫn fill giờ đều BEST-EFFORT: chỉ return null khi KHÔNG có board hợp lệ (solvable) nào.
+    let chosen = best, cScore = bestScore, cTier = bestTier, cErr = bestErr, cFill = bestFill, fillMiss = false;
+    if (!chosen) {
+      if (strictFill || !fb) return null;
+      chosen = fb; cScore = fbScore; cTier = fbTier; cErr = fbErr; cFill = fbFill; fillMiss = true;
+    }
+    // strictTarget=true -> khôi phục hành vi loại-khi-lệch-target cũ (opt-in, không có UI).
+    if (opts && opts.strictTarget && typeof target === "number" && cErr > tol) return null;
     // tô màu GIỮ NGUYÊN theo vùng gốc: đầu rắn nằm trong vùng nào -> lấy đúng màu gốc vùng đó
-    if (colored) for (const p of best) { if (p.mother) continue; const hd = p.cells[0]; const x = Array.isArray(hd) ? hd[0] : hd.x, y = Array.isArray(hd) ? hd[1] : hd.y; const col = (cm[y] || [])[x]; if (col >= 1) p.fixedColor = col; }
-    const r = { W, H, mask, pieces: best, score: bestScore, tier: bestTier, srcName: raw._name || (raw.LevelId != null ? "level_" + raw.LevelId : "") };
+    if (colored) for (const p of chosen) { if (p.mother) continue; const hd = p.cells[0]; const x = Array.isArray(hd) ? hd[0] : hd.x, y = Array.isArray(hd) ? hd[1] : hd.y; const col = (cm[y] || [])[x]; if (col >= 1) p.fixedColor = col; }
+    const r = { W, H, mask, pieces: chosen, score: cScore, tier: cTier, fillReal: Math.floor(cFill * 100), fillMiss, srcName: raw._name || (raw.LevelId != null ? "level_" + raw.LevelId : "") };
     if (typeof target === "number") { r.target = target; r.err = Math.abs(r.score - target); r.exactMiss = r.err > tol; }
     return r;
   }
@@ -439,25 +374,35 @@ self.onmessage = function (e) {
   var fillMin = (typeof m.fillMin === "number") ? m.fillMin : 0.98;
   var longFirst = m.longFirst !== false;   // mặc định BẬT: can thiệp CHỌN ĐỘ DÀI (luôn thử tối đa trước)
   var tol = (typeof m.tol === "number") ? m.tol : 3;
-  var strictTarget = !!m.strictTarget;   // mặc định false: LẤY TARGET GẦN NHẤT (fill vẫn cứng)
+  var strictTarget = !!m.strictTarget;   // mặc định false: LẤY TARGET GẦN NHẤT
+  var strictFill = !!m.strictFill;       // mặc định false: LẤY FILL GẦN NHẤT (không loại khi thiếu fill)
   // computeDifficulty1000 ĐÃ CÓ SẴN trong core (buildCoreSrc serialize từ global arrow-out.js) — không định nghĩa lại.
-  var best = null, bestScore = 0, bestTier = "", bestErr = 1e9;
+  var best = null, bestScore = 0, bestTier = "", bestErr = 1e9, bestFill = 0;   // ĐẠT fillMin, gần target nhất
+  var fb = null, fbScore = 0, fbTier = "", fbErr = 1e9, fbFill = -1;            // FALLBACK: fill cao nhất khi chưa đạt
   for (var k = 0; k < m.tries; k++) {
     var params = { fill: fillMin, minL: 2, maxL: 0, zoneMap: zoneMap, pinned: null, trap: false, longFirst: longFirst };
     var arr;
     try { arr = genFull(m.W, m.H, mask, params, (typeof m.target === "number" ? m.target : 0)); } catch (err) { continue; }
     if (!arr || arr.length < 2) continue;
-    var cov = 0; for (var i = 0; i < arr.length; i++) cov += arr[i].cells.length;
-    if (cov / mask.size < fillMin) continue;
     var d = computeDifficulty1000(arr, m.W, m.H);
     if (!d || d.tier === "KẸT" || !d.score) continue;
+    var cov = 0; for (var i = 0; i < arr.length; i++) cov += arr[i].cells.length;
+    var fillR = cov / mask.size;
     var e2 = (typeof m.target === "number") ? Math.abs(d.score - m.target) : 0;
-    if (e2 < bestErr) { bestErr = e2; best = arr; bestScore = d.score; bestTier = d.tier; if (e2 <= tol) break; }
+    if (fillR >= fillMin) {   // ĐẠT fill -> ứng viên chính (target gần nhất)
+      if (e2 < bestErr) { bestErr = e2; best = arr; bestScore = d.score; bestTier = d.tier; bestFill = fillR; if (e2 <= tol) break; }
+    } else if (fillR > fbFill || (fillR === fbFill && e2 < fbErr)) {   // CHƯA đạt fill -> giữ bản fill cao nhất
+      fbFill = fillR; fbErr = e2; fb = arr; fbScore = d.score; fbTier = d.tier;
+    }
   }
-  // LẤY TARGET GẦN NHẤT (mặc định): fill cứng, độ khó lấy bản gần nhất — KHÔNG loại dù lệch quá sai số.
-  // strictTarget=true -> khôi phục hành vi loại-hẳn cũ (đồng nhất cloneKeepColor).
-  if (strictTarget && best && typeof m.target === "number" && bestErr > tol) { best = null; bestScore = 0; bestTier = ""; }
-  self.postMessage({ idx: m.idx, pieces: best, score: bestScore, tier: bestTier });
+  // Ưu tiên bản ĐẠT fill; không có -> LẤY FILL GẦN NHẤT (fb) thay vì loại (mặc định). strictFill=true -> loại như cũ.
+  var pieces = best, score = bestScore, tier = bestTier, cErr = bestErr, cFill = bestFill, fillMiss = false;
+  if (!pieces) {
+    if (!strictFill && fb) { pieces = fb; score = fbScore; tier = fbTier; cErr = fbErr; cFill = fbFill; fillMiss = true; }
+  }
+  // strictTarget=true -> khôi phục hành vi loại-khi-lệch-target cũ.
+  if (pieces && strictTarget && typeof m.target === "number" && cErr > tol) { pieces = null; score = 0; tier = ""; }
+  self.postMessage({ idx: m.idx, pieces: pieces, score: score, tier: tier, fillReal: Math.floor(cFill * 100), fillMiss: fillMiss });
 };`;
     try { l1kWorkerURL = URL.createObjectURL(new Blob([core + MAIN], { type: "application/javascript" })); }
     catch (e) { return null; }
@@ -483,8 +428,9 @@ self.onmessage = function (e) {
       const tries = Math.max(1, opts.tries || 4);
       const fillMin = clamp(Number.isFinite(opts.fillMin) ? opts.fillMin : 0.98, 0.5, 1);
       const longFirst = opts.longFirst !== false;   // mặc định BẬT (can thiệp chọn độ dài rắn khi đặt)
-      const strictTarget = !!opts.strictTarget;   // mặc định false: lấy target gần nhất (fill vẫn cứng)
-      tasks[i] = { W: prep.W, H: prep.H, maskArr: Array.from(prep.mask), cm: prep.cm, colored: prep.colored, target, tol, tries, fillMin, longFirst, strictTarget, raw };
+      const strictTarget = !!opts.strictTarget;   // mặc định false: lấy target gần nhất
+      const strictFill = !!opts.strictFill;        // mặc định false: lấy fill gần nhất (không loại khi thiếu fill)
+      tasks[i] = { W: prep.W, H: prep.H, maskArr: Array.from(prep.mask), cm: prep.cm, colored: prep.colored, target, tol, tries, fillMin, longFirst, strictTarget, strictFill, raw };
       if (i % 60 === 59) await new Promise(res => requestAnimationFrame(() => res()));
     }
 
@@ -515,7 +461,7 @@ self.onmessage = function (e) {
         }
         if (nextIdx >= N) { if (doneCount >= N) finish(); return; }
         const idx = nextIdx++, t = tasks[idx];
-        worker.postMessage({ idx, W: t.W, H: t.H, maskArr: t.maskArr, cm: t.colored ? t.cm : null, target: t.target, tol: t.tol, tries: t.tries, fillMin: t.fillMin, longFirst: t.longFirst, strictTarget: t.strictTarget });
+        worker.postMessage({ idx, W: t.W, H: t.H, maskArr: t.maskArr, cm: t.colored ? t.cm : null, target: t.target, tol: t.tol, tries: t.tries, fillMin: t.fillMin, longFirst: t.longFirst, strictTarget: t.strictTarget, strictFill: t.strictFill });
       };
       for (let w = 0; w < workerN; w++) {
         let worker; try { worker = new Worker(url); } catch (e) { break; }
@@ -527,7 +473,7 @@ self.onmessage = function (e) {
           let r = null;
           if (data.pieces && t) {
             if (t.colored) for (const p of data.pieces) { if (p.mother) continue; const hd = p.cells[0]; const x = Array.isArray(hd) ? hd[0] : hd.x, y = Array.isArray(hd) ? hd[1] : hd.y; const col = (t.cm[y] || [])[x]; if (col >= 1) p.fixedColor = col; }
-            r = { i: idx + 1, W: t.W, H: t.H, mask: new Set(t.maskArr), pieces: data.pieces, score: data.score, tier: data.tier, srcName: t.raw._name || (t.raw.LevelId != null ? "level_" + t.raw.LevelId : "") };
+            r = { i: idx + 1, W: t.W, H: t.H, mask: new Set(t.maskArr), pieces: data.pieces, score: data.score, tier: data.tier, fillReal: data.fillReal, fillMiss: !!data.fillMiss, srcName: t.raw._name || (t.raw.LevelId != null ? "level_" + t.raw.LevelId : "") };
             if (typeof t.target === "number") { r.target = t.target; r.err = Math.abs(r.score - t.target); r.exactMiss = r.err > t.tol; }
             results[idx] = r;
           }

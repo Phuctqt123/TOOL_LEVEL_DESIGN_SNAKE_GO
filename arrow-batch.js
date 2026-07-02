@@ -1272,11 +1272,106 @@ self.onmessage = function (e) {
       }
     }
   }
+
+  /* ===== LẤP LỖ THÔNG MINH (nguồn DÙNG CHUNG cho tab Sinh hàng loạt + 1000 Levels) =====
+     autoFillHoles cũ chỉ lấp ô bị bao ĐỦ 4 phía -> lỗ >=2 ô không lấp được + lấp mọi lỗ 1 ô (kể cả hoạ tiết).
+     Bản này lấp lỗ MỌI cỡ theo PHÂN LOẠI (đo 2882 level đối thủ: 89% có lỗ, đa số là hoạ tiết):
+       GIỮ  lỗ TO (> holeMax ô, mặc định 3) = phần hình vẽ (mắt/lòng donut);
+       GIỮ  lỗ có BẠN ĐỐI XỨNG (gương tâm lỗ qua trục hình, chặt ±0.5, + cổng >=50% lỗ nhỏ mới coi là hoa văn);
+       LẤP  lỗ nhỏ lẻ loi + HỐC BIÊN (ô lõm giáp mask >=3 cạnh: lõm 1 ô/rãnh cụt 1 ô; giữ chữ U/góc rộng).
+     opts: { holeMax (mặc định 3; 0 = lấp cả lỗ to), holeSym (mặc định true; false = bỏ luật đối xứng) }. */
+  function smartFillHoles(cells, W, H, opts) {
+    const s = new Set(cells);
+    const holeMax = Number.isFinite(opts && opts.holeMax) ? opts.holeMax : 3;
+    const symKeep = !(opts && opts.holeSym === false);
+    const out = new Set(); const q = [];
+    const push = (x, y) => { if (x < 0 || y < 0 || x >= W || y >= H) return; const k = x + "," + y; if (s.has(k) || out.has(k)) return; out.add(k); q.push([x, y]); };
+    for (let x = 0; x < W; x++) { push(x, 0); push(x, H - 1); }
+    for (let y = 0; y < H; y++) { push(0, y); push(W - 1, y); }
+    while (q.length) { const [x, y] = q.pop(); push(x + 1, y); push(x - 1, y); push(x, y + 1); push(x, y - 1); }
+    const seen = new Set(), holes = [];
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+      const k0 = x + "," + y; if (s.has(k0) || out.has(k0) || seen.has(k0)) continue;
+      const comp = [[x, y]]; seen.add(k0); let head = 0;
+      while (head < comp.length) {
+        const [cx, cy] = comp[head++];
+        for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+          const nx = cx + dx, ny = cy + dy, nk = nx + "," + ny;
+          if (nx < 0 || ny < 0 || nx >= W || ny >= H || s.has(nk) || out.has(nk) || seen.has(nk)) continue;
+          seen.add(nk); comp.push([nx, ny]);
+        }
+      }
+      let sx = 0, sy = 0; comp.forEach(c => { sx += c[0]; sy += c[1]; });
+      holes.push({ cells: comp, size: comp.length, cx: sx / comp.length, cy: sy / comp.length });
+    }
+    const kept = new Set();
+    if (holes.length) {
+      let x0 = W, x1 = 0, y0 = H, y1 = 0;
+      s.forEach(k => { const i = k.indexOf(","), x = +k.slice(0, i), y = +k.slice(i + 1); if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; });
+      const mx = (x0 + x1) / 2, my = (y0 + y1) / 2;
+      const TOL = 0.51;
+      const near = (a, b) => Math.abs(a.cx - b.cx) <= TOL && Math.abs(a.cy - b.cy) <= TOL;
+      const big = holes.filter(hh => holeMax > 0 && hh.size > holeMax);
+      const small = holes.filter(hh => !(holeMax > 0 && hh.size > holeMax));
+      let paired = new Set();
+      if (symKeep && small.length >= 2) {
+        for (const hh of small) {
+          const mirrors = [{ cx: 2 * mx - hh.cx, cy: hh.cy }, { cx: hh.cx, cy: 2 * my - hh.cy }, { cx: 2 * mx - hh.cx, cy: 2 * my - hh.cy }];
+          for (const m of mirrors) {
+            if (Math.abs(m.cx - hh.cx) <= TOL && Math.abs(m.cy - hh.cy) <= TOL) continue;
+            if (small.some(o2 => o2 !== hh && o2.size === hh.size && near(o2, m))) { paired.add(hh); break; }
+          }
+        }
+        if (paired.size / small.length < 0.5) paired = new Set();
+      }
+      for (const hh of small) if (!paired.has(hh)) hh.cells.forEach(c => s.add(c[0] + "," + c[1]));
+      for (const hh of big) hh.cells.forEach(c => kept.add(c[0] + "," + c[1]));
+      for (const hh of paired) hh.cells.forEach(c => kept.add(c[0] + "," + c[1]));
+    }
+    // HỐC BIÊN: lặp tới ổn định — ô trống KHÔNG thuộc lỗ giữ, giáp mask >=3 cạnh -> lấp (lõm 1 ô/rãnh cụt).
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+        const k = x + "," + y; if (s.has(k) || kept.has(k)) continue;
+        let n = 0;
+        if (s.has((x + 1) + "," + y)) n++; if (s.has((x - 1) + "," + y)) n++;
+        if (s.has(x + "," + (y + 1))) n++; if (s.has(x + "," + (y - 1))) n++;
+        if (n >= 3) { s.add(k); changed = true; }
+      }
+    }
+    return s;
+  }
+
+  /* GỘP VÙNG MÀU CHO Ô ĐÃ LẤP: mỗi CỤM ô mới lấp (added, cm đang = -1) được gán MÀU của vùng nó
+     TIẾP XÚC NHIỀU NHẤT — đếm số cạnh giáp mỗi màu ở biên cụm, lấy màu nhiều phiếu nhất. Cụm không
+     giáp màu nào -> để -1 (floodZones sau xử BFS gần nhất). Dùng cho CẢ batch clone lẫn 1000 Levels. */
+  function mergeFilledZones(cm, added, W, H) {
+    if (!added || !added.size) return;
+    const seen = new Set();
+    for (const k0 of added) {
+      if (seen.has(k0)) continue;
+      const comp = [], stack = [k0]; seen.add(k0); const votes = {};
+      while (stack.length) {
+        const k = stack.pop(); comp.push(k);
+        const i = k.indexOf(","), x = +k.slice(0, i), y = +k.slice(i + 1);
+        for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+          const nx = x + dx, ny = y + dy; if (nx < 0 || ny < 0 || nx >= W || ny >= H) continue;
+          const nk = nx + "," + ny;
+          if (added.has(nk)) { if (!seen.has(nk)) { seen.add(nk); stack.push(nk); } }
+          else { const col = cm[ny][nx]; if (col >= 1) votes[col] = (votes[col] || 0) + 1; }   // giáp vùng màu -> +1 phiếu
+        }
+      }
+      let best = -1, bestN = 0;
+      for (const c in votes) if (votes[c] > bestN) { bestN = votes[c]; best = +c; }
+      if (best >= 1) for (const k of comp) { const i = k.indexOf(","), x = +k.slice(0, i), y = +k.slice(i + 1); cm[y][x] = best; }
+    }
+  }
   // ---------- Nhân bản (clone): bắt chước layout + PHÂN VÙNG NGẦM theo màu + đổi màu random/level ----------
   const cellXY = c => Array.isArray(c) ? { x: c[0], y: c[1] } : { x: c.x, y: c.y };
   function cloneLevel(lvl) {
     B.cloneSource = lvl;   // nhớ nguồn để re-clone khi đổi tích "Tự thiết kế màu"
-    { const wrap = $b("bCloneAutoColorWrap"); if (wrap) wrap.style.display = ""; const w2 = $b("bCloneKeepColorWrap"); if (w2) w2.style.display = ""; }   // hiện 2 nút màu khi clone
+    { const wrap = $b("bCloneAutoColorWrap"); if (wrap) wrap.style.display = ""; const w2 = $b("bCloneKeepColorWrap"); if (w2) w2.style.display = ""; const w3 = $b("bCloneFillHolesWrap"); if (w3) w3.style.display = ""; }   // hiện nút màu + Lấp lỗ khi clone
     // ----- Layout: đệm 1 ô viền quanh hình (dịch +1, W+2/H+2) -> ô tô không chạm rìa; scale 100% -----
     B.W = lvl.w + 2; B.H = lvl.h + 2; $b("bW").value = B.W; $b("bH").value = B.H;
     B.scale = 1; $b("bScale").value = 100; $b("bScaleVal").textContent = "100";
@@ -1285,8 +1380,17 @@ self.onmessage = function (e) {
     B.paint = new Set();
     for (const p of lvl.pieces) { const fc = (typeof p.fixedColor === "number") ? p.fixedColor : -1; if (fc >= 1) colored = true;
       for (const c of p.cells) { const { x, y } = cellXY(c); const X = x + 1, Y = y + 1; if (Y >= 0 && Y < B.H && X >= 0 && X < B.W) { B.paint.add(X + "," + Y); cm[Y][X] = fc; if (fc >= 1) freq[fc] = (freq[fc] || 0) + 1; } } }
-    B.paint = autoFillHoles(B.paint, B.W, B.H);   // gốc chưa fill hết -> tự lấp các ô 0 bị 1 bao quanh
-    floodZones(cm, B.paint, B.W, B.H);            // ô chưa màu (lỗ/đệm trong) -> gán về vùng màu gần nhất
+    // LẤP LỖ THÔNG MINH (giống 1000 Levels) — MẶC ĐỊNH TẮT: clone hiện layout CÓ LỖ để kiểm tra;
+    // tích "Lấp lỗ" mới lấp. Ô mới lấp gộp vào vùng màu TIẾP XÚC NHIỀU NHẤT (mergeFilledZones).
+    const origPaint = new Set(B.paint);
+    const doFill = $b("bCloneFillHoles") && $b("bCloneFillHoles").checked;
+    if (doFill) {
+      B.paint = smartFillHoles(B.paint, B.W, B.H, { holeMax: 3, holeSym: true });
+      const added = new Set(); B.paint.forEach(k => { if (!origPaint.has(k)) added.add(k); });
+      mergeFilledZones(cm, added, B.W, B.H);   // ô đã lấp -> màu vùng bên cạnh tiếp xúc nhiều nhất
+    }
+    floodZones(cm, B.paint, B.W, B.H);   // ô chưa màu còn lại (đệm trong / lỗ giữ) -> vùng gần nhất (BFS)
+    B.cloneFilled = doFill;   // nhớ trạng thái để báo cáo
     B.layoutType = "paint"; $b("bLayoutType").value = "paint"; setLayoutType("paint");
     // fill mặc định 97% + độ khó [0–100] (sao cũng được) + bỏ "Rắn mẹ"
     B.fillTarget = 97; $b("bFill").value = 97; $b("bFillVal").textContent = "97";
@@ -1306,7 +1410,7 @@ self.onmessage = function (e) {
     } else { B.cloneColorMap = null; B.cloneColorDominant = -1; }
     state.mode = "batch"; state.fromLibrary = null; syncModeUI();
     renderPreview(); updateCurveInfo();
-    $b("bProgInfo").textContent = `⧉ Nhân bản #${lvl.id}: layout ${B.W}×${B.H} (đệm viền) · ${autoDesign ? "TỰ THIẾT KẾ vùng màu" : (keepColor && colored ? "GIỮ NGUYÊN màu gốc" : (colored ? "phân vùng theo màu mẫu" : "không màu"))} · độ khó 0–100. Bấm 🎲 Sinh.`;
+    $b("bProgInfo").textContent = `⧉ Nhân bản #${lvl.id}: layout ${B.W}×${B.H} (đệm viền) · ${autoDesign ? "TỰ THIẾT KẾ vùng màu" : (keepColor && colored ? "GIỮ NGUYÊN màu gốc" : (colored ? "phân vùng theo màu mẫu" : "không màu"))} · ${doFill ? "ĐÃ lấp lỗ (gộp vùng gần nhất)" : "CHƯA lấp lỗ — tích “Lấp lỗ” để lấp & kiểm tra"} · độ khó 0–100. Bấm 🎲 Sinh.`;
     try { $b("bGenerate").scrollIntoView({ behavior: "smooth", block: "center" }); } catch (e) {}
   }
   // ---------- Tô màu CHUYÊN NGHIỆP: bộ màu hài hoà + 2 đơn vị KỀ luôn khác & tương phản ----------
@@ -1938,7 +2042,7 @@ self.onmessage = function (e) {
   }
   function applySize() {
     B.cloneColorMap = null; B.clonePinned = null; B.cloneKeep = false; B.cloneExact = false; B.cloneSource = null;   // đổi cỡ thủ công -> bỏ clone
-    { const wrap = $b("bCloneAutoColorWrap"); if (wrap) wrap.style.display = "none"; const w2 = $b("bCloneKeepColorWrap"); if (w2) w2.style.display = "none"; }
+    { const wrap = $b("bCloneAutoColorWrap"); if (wrap) wrap.style.display = "none"; const w2 = $b("bCloneKeepColorWrap"); if (w2) w2.style.display = "none"; const w3 = $b("bCloneFillHolesWrap"); if (w3) w3.style.display = "none"; }
     B.W = clamp(+$b("bW").value, 3, 60); B.H = clamp(+$b("bH").value, 3, 60);
     $b("bW").value = B.W; $b("bH").value = B.H;
     B.paint = new Set([...B.paint].filter(k => { const i = k.indexOf(","), x = +k.slice(0, i), y = +k.slice(i + 1); return x < B.W && y < B.H; }));
@@ -1946,10 +2050,11 @@ self.onmessage = function (e) {
     renderPreview(); updateCurveInfo();
   }
 
-  $b("bLayoutType").addEventListener("change", () => { B.cloneColorMap = null; B.clonePinned = null; B.cloneKeep = false; B.cloneExact = false; B.cloneSource = null; const w = $b("bCloneAutoColorWrap"); if (w) w.style.display = "none"; const w2 = $b("bCloneKeepColorWrap"); if (w2) w2.style.display = "none"; setLayoutType($b("bLayoutType").value); });   // đổi layout thủ công -> bỏ clone
+  $b("bLayoutType").addEventListener("change", () => { B.cloneColorMap = null; B.clonePinned = null; B.cloneKeep = false; B.cloneExact = false; B.cloneSource = null; const w = $b("bCloneAutoColorWrap"); if (w) w.style.display = "none"; const w2 = $b("bCloneKeepColorWrap"); if (w2) w2.style.display = "none"; const w3 = $b("bCloneFillHolesWrap"); if (w3) w3.style.display = "none"; setLayoutType($b("bLayoutType").value); });   // đổi layout thủ công -> bỏ clone
   { const fr = $b("bFreeRoll"); if (fr) fr.addEventListener("click", () => { B.freeMask = genFreeShapes(B.W, B.H); renderPreview(); updateCurveInfo(); }); }   // tung lại bố cục hình rời
   $b("bCloneAutoColor").addEventListener("change", () => { if ($b("bCloneAutoColor").checked && $b("bCloneKeepColor")) $b("bCloneKeepColor").checked = false; if (B.cloneSource) cloneLevel(B.cloneSource); });   // đổi tích -> dựng lại clone (bắt chước <-> tự thiết kế)
   { const kc = $b("bCloneKeepColor"); if (kc) kc.addEventListener("change", () => { if (kc.checked && $b("bCloneAutoColor")) $b("bCloneAutoColor").checked = false; if (B.cloneSource) cloneLevel(B.cloneSource); }); }   // giữ-nguyên-màu <-> các chế độ khác (loại trừ lẫn nhau với tự-thiết-kế)
+  { const fh = $b("bCloneFillHoles"); if (fh) fh.addEventListener("change", () => { if (B.cloneSource) cloneLevel(B.cloneSource); }); }   // tích/bỏ Lấp lỗ -> dựng lại clone (hiện lỗ <-> lấp lỗ) để kiểm tra
   $b("bApplySize").addEventListener("click", applySize);
   $b("bImgBtn").addEventListener("click", () => $b("bImg").click());
   $b("bImg").addEventListener("change", () => {
@@ -2061,8 +2166,10 @@ self.onmessage = function (e) {
     window.__batch = window.__batch || {};
     window.__batch.genLevelCore = genLevelCore;   // sinh 1 level theo target + zone confinement (VÙNG NGẦM)
     window.__batch.genFull = genFull;              // engine đặt rắn thô (1 lần/gọi) — nhanh hơn genLevelCore (4 lần)
-    window.__batch.floodZones = floodZones;        // lấp ô chưa màu -> vùng màu gần nhất
-    window.__batch.autoFillHoles = autoFillHoles;  // lấp lỗ bị bao quanh
+    window.__batch.floodZones = floodZones;        // lấp ô chưa màu -> vùng màu gần nhất (BFS)
+    window.__batch.autoFillHoles = autoFillHoles;  // lấp lỗ bị bao quanh (cũ, chỉ ô bao đủ 4 phía)
+    window.__batch.smartFillHoles = smartFillHoles;    // LẤP LỖ THÔNG MINH (phân loại giữ/lấp + hốc biên) — dùng chung
+    window.__batch.mergeFilledZones = mergeFilledZones; // gộp vùng ô đã lấp -> màu tiếp xúc nhiều nhất
     window.__batch.buildCoreSrc = buildCoreSrc;    // nguồn Worker ĐÃ KIỂM CHỨNG (genFull+deps) để dựng Worker riêng
   }
 })();
