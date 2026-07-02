@@ -230,7 +230,7 @@
     const fillMin = clamp((parseInt($("l1kFillMin").value, 10) || 98) / 100, 0.5, 1);
     const tries = clamp(parseInt($("l1kTries").value, 10) || 25, 1, 2000);
     // Lấp lỗ thông minh: giữ lỗ > holeMax ô (hình vẽ) + lỗ đối xứng (hoạ tiết); lấp lỗ nhỏ lẻ loi.
-    const holeMax = clamp((v => Number.isFinite(v) ? v : 3)(parseInt($("l1kHoleMax").value, 10)), 0, 999);
+    const holeMax = clamp((v => Number.isFinite(v) ? v : 8)(parseInt($("l1kHoleMax").value, 10)), 0, 999);   // mặc định 8 (đồng bộ batch) — lấp lỗ nhiều ô tự động
     const holeSym = !!($("l1kHoleSym") && $("l1kHoleSym").checked);
     return { fillMin, tries, longFirst: true, holeMax, holeSym };
   }
@@ -649,7 +649,7 @@
           <label class="fld" style="flex:0 0 auto" title="Chấp nhận lệch ±N so với target — TUYỆT ĐỐI, level lệch quá số này sẽ bị LOẠI (không sinh), không bao giờ ghi ra board sai target.">Sai số ± <input type="number" id="l1kTol" min="0" max="40" value="3" style="width:56px" /></label>
           <label class="fld" style="flex:0 0 auto" title="Tỉ lệ lấp đầy tối thiểu. Mặc định 98% (cho phép <100% để dễ đạt hơn nhiều, giữ vùng màu sạch hơn — không cần ép kín tuyệt đối).">Fill tối thiểu (%) <input type="number" id="l1kFillMin" min="50" max="100" value="98" style="width:64px" /></label>
           <label class="fld" style="flex:0 0 auto" title="Số lần THỬ LẠI tối đa cho MỖI level tới khi đạt đúng sai số. Board khó/lớn cần nhiều lần thử hơn mới trúng — cứ tăng số này nếu thấy nhiều level 'không sinh được' (đổi lại: chậm hơn/level, nhưng không ảnh hưởng level khác vì chạy song song).">Số lần thử/level <input type="number" id="l1kTries" min="1" max="2000" value="25" style="width:68px" /></label>
-          <label class="fld" style="flex:0 0 auto" title="Lỗ kín TO hơn N ô được coi là PHẦN CỦA HÌNH VẼ (mắt, lòng donut...) -> GIỮ nguyên, không lấp. Lỗ ≤ N ô lẻ loi (không đối xứng) -> LẤP. Đặt 0 = lấp cả lỗ to (trừ lỗ đối xứng nếu đang bật).">Giữ lỗ &gt; <input type="number" id="l1kHoleMax" min="0" max="999" value="3" style="width:56px" /> ô</label>
+          <label class="fld" style="flex:0 0 auto" title="Lấp lỗ TỰ ĐỘNG (luôn bật). Lỗ kín TO hơn N ô = PHẦN CỦA HÌNH VẼ (mắt, lòng donut...) -> GIỮ; lỗ ≤ N ô (lẻ loi/slot/block) + lõm biên -> LẤP. Mặc định 8. Đặt 0 = lấp cả lỗ to (trừ lỗ đối xứng).">Giữ lỗ &gt; <input type="number" id="l1kHoleMax" min="0" max="999" value="8" style="width:56px" /> ô</label>
           <label class="chk" style="flex:0 0 auto" title="Lỗ nhỏ nhưng có BẠN ĐỐI XỨNG (gương qua trục dọc/ngang/tâm của hình) = hoạ tiết trang trí -> GIỮ nguyên. Tắt = lỗ nhỏ nào cũng lấp."><input type="checkbox" id="l1kHoleSym" checked /> Giữ lỗ đối xứng</label>
         </div>
         <div class="seq-info" id="l1kGenCount" style="margin-top:4px"></div>

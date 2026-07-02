@@ -2098,7 +2098,18 @@ self.onmessage = function (e) {
   $b("bPaintFill").addEventListener("click", () => { B.paint = new Set(); for (let y = 0; y < B.H; y++) for (let x = 0; x < B.W; x++) B.paint.add(x + "," + y); renderPreview(); });
   $b("bPaintClear").addEventListener("click", () => { B.paint = new Set(); renderPreview(); });
   $b("bPaintInvert").addEventListener("click", () => { const n = new Set(); for (let y = 0; y < B.H; y++) for (let x = 0; x < B.W; x++) { const k = x + "," + y; if (!B.paint.has(k)) n.add(k); } B.paint = n; renderPreview(); });
-  $b("bPaintFillHoles").addEventListener("click", () => { B.paint = autoFillHoles(B.paint, B.W, B.H); renderPreview(); });
+  // "Lấp lỗ" (công cụ paint): dùng LẤP LỖ THÔNG MINH (giống clone/1000 Levels) — lấp lỗ nhiều ô + lõm biên,
+  // giữ lỗ to/đối xứng. Nếu đang clone (có bản đồ màu) -> tô ô mới lấp theo vùng tiếp xúc nhiều nhất.
+  $b("bPaintFillHoles").addEventListener("click", () => {
+    const orig = new Set(B.paint);
+    B.paint = smartFillHoles(B.paint, B.W, B.H, { holeMax: 8, holeSym: true });
+    if (B.cloneColorMap && Array.isArray(B.cloneColorMap)) {
+      const added = new Set(); B.paint.forEach(k => { if (!orig.has(k)) added.add(k); });
+      mergeFilledZones(B.cloneColorMap, added, B.W, B.H);
+      floodZones(B.cloneColorMap, B.paint, B.W, B.H);
+    }
+    renderPreview();
+  });
 
   function syncDiffMode() {   // hiện/ẩn min-max vs đường cong theo kiểu độ khó
     const isCurve = B.diffMode === "curve";
