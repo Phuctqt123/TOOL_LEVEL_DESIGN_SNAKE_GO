@@ -1435,10 +1435,10 @@ self.onmessage = function (e) {
     B.clonePinned = null; B.cloneKeep = false; B.cloneExact = false;
     const keepColor = $b("bCloneKeepColor") && $b("bCloneKeepColor").checked;   // GIỮ NGUYÊN màu gốc, chỉ clone cách sắp xếp
     const autoDesign = !keepColor && $b("bCloneAutoColor") && $b("bCloneAutoColor").checked;
-    if (autoDesign) {   // TỰ THIẾT KẾ: bỏ màu mẫu, chỉ mượn layout -> chia vài VÙNG LỚN theo không gian, tô palette mới
-      const K = clamp(2 + Math.round(B.paint.size / 150), 2, 5);
-      B.cloneColorMap = spatialZones(B.paint, B.W, B.H, K, COLOR_PALETTES[0].length) || cm;
-      B.cloneColorDominant = -1; colorMode = "game"; if (typeof syncColorBtn === "function") syncColorBtn();
+    if (autoDesign) {   // TỰ THIẾT KẾ: bỏ màu mẫu, chỉ mượn LAYOUT. cloneColorMap = null -> gen chạy perLevelZones
+      // (MỖI level tự chia vùng bằng cutZones ngẫu nhiên như "pattern/lát cắt" bên hình thường) ->
+      // 100 level ~90 kiểu tô KHÁC NHAU, thay vì 1 spatialZones cố định dùng chung như trước.
+      B.cloneColorMap = null; B.cloneColorDominant = -1; colorMode = "game"; if (typeof syncColorBtn === "function") syncColorBtn();
     } else if (colored) {   // BẮT CHƯỚC màu mẫu: mỗi vùng GIỮ ĐÚNG màu gốc; keepColor -> giữ NGUYÊN (không xoay hue)
       B.cloneColorMap = cm; B.cloneKeep = true; B.cloneExact = keepColor; colorMode = "game"; if (typeof syncColorBtn === "function") syncColorBtn();
     } else { B.cloneColorMap = null; B.cloneColorDominant = -1; }
